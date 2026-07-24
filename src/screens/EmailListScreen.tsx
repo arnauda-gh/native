@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, TextInput, Image, ActivityIndicator, Modal, Platform, ScrollView, TouchableWithoutFeedback, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, Pressable, TextInput, Image, ActivityIndicator, Modal, Platform, ScrollView, TouchableWithoutFeedback, Alert, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
@@ -46,6 +46,7 @@ function isPinned(email: Email): boolean {
   return !!email.keywords?.$important;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
 const EmailRow = React.memo(function EmailRow({
   item,
@@ -80,28 +81,67 @@ const EmailRow = React.memo(function EmailRow({
   const handlePress = React.useCallback(() => onPress(item.id), [onPress, item.id]);
   const handleLongPress = React.useCallback(() => onLongPress(item.id), [onLongPress, item.id]);
 
+  const rowScale = React.useRef(new Animated.Value(1)).current;
+  const checkAnim = React.useRef(new Animated.Value(selectionMode ? 1 : 0)).current;
+
+  React.useEffect(() => {
+    Animated.spring(checkAnim, {
+      toValue: selectionMode ? 1 : 0,
+      speed: 24,
+      bounciness: 4,
+      useNativeDriver: false,
+    }).start();
+  }, [selectionMode, checkAnim]);
+
+  const handlePressIn = () => {
+    Animated.spring(rowScale, {
+      toValue: 0.99,
+      speed: 30,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    Animated.spring(rowScale, {
+      toValue: 1,
+      speed: 24,
+      bounciness: 4,
+      useNativeDriver: true,
+    }).start();
+  };
+
   return (
-    <Pressable
+    <AnimatedPressable
       style={({ pressed }) => [
         styles.emailRow,
-        { paddingVertical: density.rowPaddingVertical },
+        { paddingVertical: density.rowPaddingVertical, transform: [{ scale: rowScale }] },
         pressed && styles.emailRowPressed,
         selected && styles.emailRowSelected,
       ]}
       onPress={handlePress}
       onLongPress={handleLongPress}
+      onPressIn={handlePressIn}
+      onPressOut={handlePressOut}
       delayLongPress={300}
     >
       {unread && <View style={styles.unreadDot} />}
-      {selectionMode && (
-        <View style={styles.rowCheckboxWrap}>
-          {selected ? (
-            <SquareCheck size={16} color={c.primary} />
-          ) : (
-            <Square size={16} color={c.textMuted} />
-          )}
-        </View>
-      )}
+      <Animated.View
+        style={[
+          styles.rowCheckboxWrap,
+          {
+            width: checkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 24] }),
+            opacity: checkAnim,
+            transform: [{ scale: checkAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }],
+          },
+        ]}
+      >
+        {selected ? (
+          <SquareCheck size={16} color={c.primary} />
+        ) : (
+          <Square size={16} color={c.textMuted} />
+        )}
+      </Animated.View>
       {density.showAvatar && (
         <SenderAvatar name={senderName} email={senderEmail} size={componentSizes.avatarMd} />
       )}
@@ -145,7 +185,7 @@ const EmailRow = React.memo(function EmailRow({
           </Text>
         )}
       </View>
-    </Pressable>
+    </AnimatedPressable>
   );
 });
 
@@ -543,11 +583,30 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
     }
   }, [mailboxes, currentMailboxId, selectMailbox]);
 
+  const selectionAnim = React.useRef(new Animated.Value(selectionMode ? 1 : 0)).current;
+
+  React.useEffect(() => {
+    Animated.spring(selectionAnim, {
+      toValue: selectionMode ? 1 : 0,
+      speed: 24,
+      bounciness: 4,
+      useNativeDriver: Platform.OS !== 'web',
+    }).start();
+  }, [selectionMode, selectionAnim]);
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       {selectionMode ? (
-        <View style={styles.header}>
+        <Animated.View
+          style={[
+            styles.header,
+            {
+              opacity: selectionAnim,
+              transform: [{ translateY: selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [-10, 0] }) }],
+            },
+          ]}
+        >
           <Pressable onPress={clearSelection} style={styles.headerButton}>
             <X size={20} color={c.text} />
           </Pressable>
@@ -604,9 +663,9 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
           >
             <Trash2 size={20} color={c.text} />
           </Pressable>
-        </View>
+        </Animated.View>
       ) : (
-        <View style={styles.header}>
+        <Animated.View style={styles.header}>
           <Pressable onPress={() => setDrawerOpen(true)} style={styles.headerButton}>
             <Menu size={20} color={c.textMuted} />
           </Pressable>
@@ -629,7 +688,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
             style={styles.headerLogo}
             resizeMode="contain"
           />
-        </View>
+        </Animated.View>
       )}
 
       {/* Search bar (always visible) */}
@@ -778,17 +837,6 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
             Check that your JMAP account has mail capability.
           </Text>
         </View>
-      ) : emails.length === 0 ? (
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>
-            No emails in {currentMailbox?.name ?? 'this folder'}
-          </Text>
-          {currentMailbox ? (
-            <Text style={styles.hintText}>
-              {currentMailbox.totalEmails} total · {currentMailbox.unreadEmails} unread
-            </Text>
-          ) : null}
-        </View>
       ) : (
         <FlatList
           data={visibleEmails}
@@ -800,6 +848,30 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
           onEndReachedThreshold={0.3}
           refreshing={loading}
           onRefresh={() => { void refreshEmails(); }}
+          initialNumToRender={10}
+          maxToRenderPerBatch={8}
+          windowSize={5}
+          removeClippedSubviews={Platform.OS === 'android'}
+          updateCellsBatchingPeriod={50}
+          ListEmptyComponent={
+            !loading ? (
+              <View style={styles.loadingContainer}>
+                <Text style={styles.loadingText}>
+                  No emails in {currentMailbox?.name ?? 'this folder'}
+                </Text>
+                {currentMailbox ? (
+                  <Text style={styles.hintText}>
+                    {currentMailbox.totalEmails} total · {currentMailbox.unreadEmails} unread
+                  </Text>
+                ) : null}
+              </View>
+            ) : (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={c.primary} />
+                <Text style={styles.loadingText}>Loading emails...</Text>
+              </View>
+            )
+          }
         />
       )}
 

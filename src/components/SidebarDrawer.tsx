@@ -223,24 +223,47 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
     onClose();
   }, [selectMailbox, onClose]);
 
+  const [mounted, setMounted] = React.useState(visible);
   const slideX = React.useRef(new Animated.Value(-Dimensions.get('window').width)).current;
   const overlayOpacity = React.useRef(new Animated.Value(0)).current;
-  const openDuration = useAnimDuration(240);
-  const closeDuration = useAnimDuration(200);
 
   React.useEffect(() => {
     if (visible) {
+      setMounted(true);
+      slideX.setValue(-Dimensions.get('window').width);
+      overlayOpacity.setValue(0);
       Animated.parallel([
-        Animated.timing(slideX, { toValue: 0, duration: openDuration, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(overlayOpacity, { toValue: 1, duration: openDuration, useNativeDriver: true }),
+        Animated.spring(slideX, {
+          toValue: 0,
+          bounciness: 2,
+          speed: 18,
+          useNativeDriver: true,
+        }),
+        Animated.timing(overlayOpacity, {
+          toValue: 1,
+          duration: 220,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
       ]).start();
     } else {
       Animated.parallel([
-        Animated.timing(slideX, { toValue: -Dimensions.get('window').width, duration: closeDuration, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(overlayOpacity, { toValue: 0, duration: closeDuration, useNativeDriver: true }),
-      ]).start();
+        Animated.timing(slideX, {
+          toValue: -Dimensions.get('window').width,
+          duration: 200,
+          easing: Easing.inOut(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(overlayOpacity, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
     }
-  }, [visible, slideX, overlayOpacity, openDuration, closeDuration]);
+  }, [visible, slideX, overlayOpacity]);
 
   const accountEmail = username || '';
   const initials = React.useMemo(
@@ -261,14 +284,10 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
     return hostname ? `${username}@${hostname}` : username;
   }, [username, hostname]);
 
+  if (!mounted) return null;
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="none"
-      statusBarTranslucent
-      onRequestClose={onClose}
-    >
+    <View style={styles.modalWrapper} pointerEvents={visible ? 'auto' : 'none'}>
       <Animated.View style={[styles.overlay, { opacity: overlayOpacity }]}>
         <Pressable style={styles.overlayPress} onPress={onClose} />
       </Animated.View>
@@ -382,12 +401,6 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
               )}
 
               <View style={styles.accountMenuDivider} />
-              {accounts.length > 1 && activeAccountId && (() => {
-                const active = accounts.find((a) => a.id === activeAccountId);
-                if (!active || active.isDefault) return null;
-                return (
-                  <Pressable
-                    style={({ pressed }) => [
                       styles.accountMenuAction,
                       pressed && styles.accountMenuActionPressed,
                     ]}
@@ -496,6 +509,11 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
 
 function makeStyles(c: ThemePalette) {
   return StyleSheet.create({
+  modalWrapper: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 1000,
+    elevation: 10,
+  },
   overlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.5)',
