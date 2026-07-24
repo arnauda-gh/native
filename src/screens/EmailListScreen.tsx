@@ -81,67 +81,28 @@ const EmailRow = React.memo(function EmailRow({
   const handlePress = React.useCallback(() => onPress(item.id), [onPress, item.id]);
   const handleLongPress = React.useCallback(() => onLongPress(item.id), [onLongPress, item.id]);
 
-  const rowScale = React.useRef(new Animated.Value(1)).current;
-  const checkAnim = React.useRef(new Animated.Value(selectionMode ? 1 : 0)).current;
-
-  React.useEffect(() => {
-    Animated.spring(checkAnim, {
-      toValue: selectionMode ? 1 : 0,
-      speed: 24,
-      bounciness: 4,
-      useNativeDriver: false,
-    }).start();
-  }, [selectionMode, checkAnim]);
-
-  const handlePressIn = () => {
-    Animated.spring(rowScale, {
-      toValue: 0.99,
-      speed: 30,
-      bounciness: 4,
-      useNativeDriver: true,
-    }).start();
-  };
-
-  const handlePressOut = () => {
-    Animated.spring(rowScale, {
-      toValue: 1,
-      speed: 24,
-      bounciness: 4,
-      useNativeDriver: true,
-    }).start();
-  };
-
   return (
-    <AnimatedPressable
+    <Pressable
       style={({ pressed }) => [
         styles.emailRow,
-        { paddingVertical: density.rowPaddingVertical, transform: [{ scale: rowScale }] },
+        { paddingVertical: density.rowPaddingVertical },
         pressed && styles.emailRowPressed,
         selected && styles.emailRowSelected,
       ]}
       onPress={handlePress}
       onLongPress={handleLongPress}
-      onPressIn={handlePressIn}
-      onPressOut={handlePressOut}
       delayLongPress={300}
     >
       {unread && <View style={styles.unreadDot} />}
-      <Animated.View
-        style={[
-          styles.rowCheckboxWrap,
-          {
-            width: checkAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 24] }),
-            opacity: checkAnim,
-            transform: [{ scale: checkAnim.interpolate({ inputRange: [0, 1], outputRange: [0.4, 1] }) }],
-          },
-        ]}
-      >
-        {selected ? (
-          <SquareCheck size={16} color={c.primary} />
-        ) : (
-          <Square size={16} color={c.textMuted} />
-        )}
-      </Animated.View>
+      {selectionMode && (
+        <View style={styles.rowCheckboxWrap}>
+          {selected ? (
+            <SquareCheck size={16} color={c.primary} />
+          ) : (
+            <Square size={16} color={c.textMuted} />
+          )}
+        </View>
+      )}
       {density.showAvatar && (
         <SenderAvatar name={senderName} email={senderEmail} size={componentSizes.avatarMd} />
       )}
@@ -185,7 +146,7 @@ const EmailRow = React.memo(function EmailRow({
           </Text>
         )}
       </View>
-    </AnimatedPressable>
+    </Pressable>
   );
 });
 
@@ -598,15 +559,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       {selectionMode ? (
-        <Animated.View
-          style={[
-            styles.header,
-            {
-              opacity: selectionAnim,
-              transform: [{ translateY: selectionAnim.interpolate({ inputRange: [0, 1], outputRange: [-10, 0] }) }],
-            },
-          ]}
-        >
+        <View style={styles.header}>
           <Pressable onPress={clearSelection} style={styles.headerButton}>
             <X size={20} color={c.text} />
           </Pressable>
@@ -663,9 +616,9 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
           >
             <Trash2 size={20} color={c.text} />
           </Pressable>
-        </Animated.View>
+        </View>
       ) : (
-        <Animated.View style={styles.header}>
+        <View style={styles.header}>
           <Pressable onPress={() => setDrawerOpen(true)} style={styles.headerButton}>
             <Menu size={20} color={c.textMuted} />
           </Pressable>
@@ -688,7 +641,7 @@ export default function EmailListScreen({ onEmailPress, onComposePress }: EmailL
             style={styles.headerLogo}
             resizeMode="contain"
           />
-        </Animated.View>
+        </View>
       )}
 
       {/* Search bar (always visible) */}
