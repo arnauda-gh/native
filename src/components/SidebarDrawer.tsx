@@ -401,16 +401,20 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
               )}
 
               <View style={styles.accountMenuDivider} />
-                      styles.accountMenuAction,
-                      pressed && styles.accountMenuActionPressed,
-                    ]}
-                    onPress={() => setDefaultAccount(active.id)}
-                  >
-                    <Star size={16} color={c.textSecondary} />
-                    <Text style={styles.accountMenuActionText}>Set as default</Text>
-                  </Pressable>
-                );
-              })()}
+              <Pressable
+                style={({ pressed }) => [
+                  styles.accountMenuAction,
+                  pressed && styles.accountMenuActionPressed,
+                ]}
+                onPress={() => {
+                  setAccountMenuOpen(false);
+                  onClose();
+                  navigation.navigate('ManageAccounts');
+                }}
+              >
+                <Layers size={16} color={c.textSecondary} />
+                <Text style={styles.accountMenuActionText}>Manage accounts</Text>
+              </Pressable>
               <Pressable
                 style={({ pressed }) => [
                   styles.accountMenuAction,
@@ -503,7 +507,7 @@ export default function SidebarDrawer({ visible, onClose }: SidebarDrawerProps) 
           </ScrollView>
         </SafeAreaView>
       </Animated.View>
-    </Modal>
+    </View>
   );
 }
 
