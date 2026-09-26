@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  How Contacts apps show and edit contacts of the Bulwark account (#34). The
+  EditSchema lists exactly the data kinds device sync maps to JSContact
+  (docs/device-sync.md, "Contacts mapping"); apps offer nothing else.
+-->
+<ContactsAccountType xmlns:android="http://schemas.android.com/apk/res/android">
+    <EditSchema>
+        <DataKind kind="name" maxOccurs="1"
+            supportsDisplayName="true"
+            supportsPrefix="true"
+            supportsMiddleName="true"
+            supportsSuffix="true"
+            supportsPhoneticFamilyName="true"
+            supportsPhoneticMiddleName="true"
+            supportsPhoneticGivenName="true" />
+        <DataKind kind="photo" maxOccurs="1" />
+        <DataKind kind="phone" />
+        <DataKind kind="email" />
+        <DataKind kind="nickname" maxOccurs="1" />
+        <DataKind kind="postal" needsStructured="true" />
+        <DataKind kind="organization" maxOccurs="1" />
+        <DataKind kind="website" />
+        <DataKind kind="event" dateWithTime="false" />
+        <DataKind kind="relationship" />
+        <DataKind kind="note" maxOccurs="1" />
+        <DataKind kind="group_membership" maxOccurs="1" />
+    </EditSchema>
+</ContactsAccountType>
