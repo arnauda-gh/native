@@ -17,9 +17,14 @@ import { chipBackground, normalizeHex, type WidgetPalette } from './theme';
 import { filledIcon, icon, type FilledIconName, type IconName } from './icons';
 import type { WidgetClick } from './clicks';
 
-/** Corner radius of the widget surface; launchers clip to roughly this on Android 12+. */
+/** Corner radius of the widget surface; `widget_radius` in android/app/src/main/res/values/dimens.xml. */
 export const WIDGET_RADIUS = 22;
 
+/**
+ * The widget's background. Its edge and the clip to rounded corners come from
+ * the root layout (android/app/src/main/res/layout/rn_widget.xml), which has the
+ * launcher's real size; this bitmap is drawn at the reported one and can be cut off.
+ */
 export function Surface({
   p,
   children,
@@ -39,8 +44,6 @@ export function Surface({
         width: 'match_parent',
         backgroundColor: p.bg,
         borderRadius: WIDGET_RADIUS,
-        borderWidth: 1,
-        borderColor: p.frame,
         overflow: 'hidden',
         ...style,
       }}

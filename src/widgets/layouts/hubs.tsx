@@ -306,8 +306,8 @@ export const MailAndNextLayout: Layout = ({ s, p, f, now, height }) => {
           height: 'match_parent',
           padding: pad,
           backgroundColor: unread > 0 ? p.unreadRow : p.bg,
-          borderTopLeftRadius: WIDGET_RADIUS - 1,
-          borderBottomLeftRadius: WIDGET_RADIUS - 1,
+          borderTopLeftRadius: WIDGET_RADIUS,
+          borderBottomLeftRadius: WIDGET_RADIUS,
         }}
       >
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>

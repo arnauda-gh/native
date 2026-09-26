@@ -29,8 +29,6 @@ import type { EventItem, WidgetSnapshot } from '../snapshot';
 import { chipBackground, normalizeHex, type WidgetPalette } from '../theme';
 import type { Layout } from './types';
 
-/** Surface's 1dp frame; Android adds a border to the padding, so it eats space. */
-const FRAME = 1;
 const HOUR = 3600000;
 const GRID_START_HOUR = 8;
 const GRID_END_HOUR = 18;
@@ -207,7 +205,7 @@ export const AgendaLayout: Layout = ({ s, p, f, now, height }) => {
     );
   }
   // Header bar plus its 1dp rule.
-  const room = height - 2 * FRAME - headerHeight - 1;
+  const room = height - headerHeight - 1;
   const { sections, hidden } = planAgenda(days, room);
   const rows: React.JSX.Element[] = [];
   sections.forEach((day, d) => {
@@ -366,12 +364,12 @@ export const WeekLayout: Layout = ({ s, p, f, now, width, height }) => {
   const events = s.calendar.events;
   const first = startOfWeek(now, s.weekStart);
   const days = Array.from({ length: 7 }, (_, i) => addDays(first, i));
-  const colWidth = (width - 2 * FRAME - 2 * WEEK_PAD) / 7;
+  const colWidth = (width - 2 * WEEK_PAD) / 7;
   const segments = allDaySegments(events, days);
   const strip = segments.some((seg) => seg.event !== null);
   const gridHeight = Math.max(
     0,
-    height - 2 * FRAME - WEEK_PAD - WEEK_LABEL_HEIGHT - 2 - WEEK_DAY_SIZE - WEEK_GAP
+    height - WEEK_PAD - WEEK_LABEL_HEIGHT - 2 - WEEK_DAY_SIZE - WEEK_GAP
       - (strip ? WEEK_STRIP_HEIGHT + WEEK_GAP : 0) - 1,
   );
   const windowStart = startOfDay(now) + GRID_START_HOUR * HOUR;
@@ -566,11 +564,11 @@ export const MonthLayout: Layout = ({ s, p, f, now, width, height }) => {
   const weeks = monthGrid(s.calendar.events, now, s.weekStart);
   const next = upcoming(s.calendar.events, now);
   const headerHeight = height >= 340 ? 44 : 38;
-  const cellWidth = (width - 2 * FRAME - 2 * MONTH_PAD) / 7;
+  const cellWidth = (width - 2 * MONTH_PAD) / 7;
   const chipsHeight = (n: number) =>
     n === 0 ? 0 : MONTH_CHIPS_TOP + n * MONTH_CHIP_HEIGHT + (n - 1) * 4 + MONTH_CHIPS_BOTTOM;
   const gridRoom = (n: number) =>
-    height - 2 * FRAME - headerHeight - MONTH_LABEL_HEIGHT - MONTH_GRID_TOP - chipsHeight(n);
+    height - headerHeight - MONTH_LABEL_HEIGHT - MONTH_GRID_TOP - chipsHeight(n);
   // Two chips when the weeks still get a comfortable row, else one, else none.
   let chips = Math.min(2, next.length);
   while (chips > 0 && gridRoom(chips) / weeks.length < MONTH_CELL_MIN) chips -= 1;
@@ -700,7 +698,7 @@ function TodayColumn({
   const tomorrowList = eventsOnDay(events, addDays(today, 1));
 
   // The "N more this week" line is always reserved; chips share the rest.
-  const room = height - 2 * FRAME - 2 * TODAY_PAD - TODAY_LINE;
+  const room = height - 2 * TODAY_PAD - TODAY_LINE;
   const row = TODAY_CHIP + TODAY_GAP;
   let withTomorrow = tomorrowList.length > 0;
   let slots = Math.floor((room - (withTomorrow ? TOMORROW_BLOCK : 0) + TODAY_GAP) / row);
@@ -792,7 +790,7 @@ function TodayColumn({
 export const TodayEventsLayout: Layout = ({ s, p, f, now, height }) => {
   // The date block is ~108dp tall at 40sp; a short 4x2 gets a smaller number
   // and, if still tight, loses the month line.
-  const room = height - 2 * FRAME - 2 * TODAY_PAD;
+  const room = height - 2 * TODAY_PAD;
   const big = room >= 108 ? 40 : 32;
   const showMonth = room >= 3 * 18 + Math.ceil(big * 1.33);
   return (
@@ -820,7 +818,7 @@ export const NextEventLayout: Layout = ({ s, p, f, now, height }) => {
   const when = running ? f.t('widgets.calendar.now', 'Now') : capitalize(f.relative(e.start, now), f.locale);
   // Status line, gap, one title line and the time range always show; then the
   // place, the calendar and a second title line, as long as they fit.
-  const room = height - 2 * FRAME - 28;
+  const room = height - 28;
   let used = 16 + 6 + 22 + 18;
   const place = placeOf(f, e);
   const showPlace = !!place && used + 16 <= room;
@@ -888,7 +886,7 @@ function TwoLineChip({ f, e, now }: { f: Fmt; e: EventItem; now: number }) {
 }
 
 export const DateNextLayout: Layout = ({ s, p, f, now, height }) => {
-  const room = height - 2 * FRAME - 2 * DATE_PAD - DATE_CIRCLE - 8;
+  const room = height - 2 * DATE_PAD - DATE_CIRCLE - 8;
   const count = room >= 2 * DATE_CHIP + 4 ? 2 : 1;
   const next = s.calendar.supported ? upcoming(s.calendar.events, now).slice(0, count) : [];
   const chips: React.JSX.Element[] = [];

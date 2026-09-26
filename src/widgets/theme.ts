@@ -10,15 +10,16 @@ export type WidgetScheme = 'light' | 'dark';
 
 export interface WidgetPalette {
   scheme: WidgetScheme;
-  /** Widget surface (webmail `--color-background`). */
+  /**
+   * Widget surface (webmail `--color-background`). The edge around it is drawn
+   * natively, as `widget_frame` in android/app/src/main/res/values/colors.xml.
+   */
   bg: ColorProp;
   fg: ColorProp;
   muted: ColorProp;
   /** Search pill, segmented track, quota ring track (webmail `--color-muted`). */
   mutedBg: ColorProp;
   border: ColorProp;
-  /** Outer widget edge. */
-  frame: ColorProp;
   primary: ColorProp;
   primaryFg: ColorProp;
   accent: ColorProp;
@@ -66,7 +67,6 @@ export const LIGHT: WidgetPalette = {
   muted: '#64748b',
   mutedBg: '#f1f5f9',
   border: '#e2e8f0',
-  frame: '#e2e8f0',
   primary: '#3b82f6',
   primaryFg: '#ffffff',
   accent: '#dbeafe',
@@ -108,7 +108,6 @@ export const DARK: WidgetPalette = {
   muted: '#a3a3a3',
   mutedBg: '#262626',
   border: '#2d2d2d',
-  frame: 'rgba(128, 128, 128, 0.3)',
   primary: '#fafafa',
   primaryFg: '#171717',
   accent: '#1e3a8a',
