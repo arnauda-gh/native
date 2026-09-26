@@ -3,6 +3,7 @@ import { handleDeepLink, parseDeepLink, shareToDeepLink } from '../linking';
 import { usePendingSettingsTab } from '../pending-settings-tab';
 import { usePendingCalendarOpen } from '../pending-calendar-open';
 import { usePendingMailSearch } from '../pending-mail-search';
+import { links } from '../../widgets/clicks';
 
 describe('parseDeepLink', () => {
   it('parses app-scheme mail links', () => {
@@ -79,6 +80,14 @@ describe('parseDeepLink', () => {
   it('parses the widget links: reply, draft, unified views, scheduled and search', () => {
     expect(parseDeepLink('bulwarkmobile://mail/message/M1?account=a%40b&jmapAccount=team&action=reply')).toEqual({
       kind: 'message', emailId: 'M1', accountId: 'a@b', jmapAccountId: 'team', action: 'reply',
+    });
+    // What the widgets build is what the app reads, thread included.
+    const m = { id: 'M/1', threadId: 'T1', accountId: 'a@b', jmapAccountId: 'team' };
+    expect(parseDeepLink(links.reply(m))).toEqual({
+      kind: 'message', emailId: 'M/1', accountId: 'a@b', jmapAccountId: 'team', threadId: 'T1', action: 'reply',
+    });
+    expect(parseDeepLink(links.message({ id: 'M2', accountId: 'a@b' }))).toEqual({
+      kind: 'message', emailId: 'M2', accountId: 'a@b',
     });
     expect(parseDeepLink('bulwarkmobile://mail/draft/D1')).toEqual({ kind: 'draft', emailId: 'D1', accountId: undefined });
     expect(parseDeepLink('bulwarkmobile://mail/unified?view=starred')).toEqual({ kind: 'unified', view: 'starred' });
@@ -179,7 +188,7 @@ describe('handleDeepLink', () => {
     }));
   });
 
-  it('opens a group-mailbox message in its JMAP account and hands replies to the composer opener', async () => {
+  it('opens a group-mailbox message in its JMAP account', async () => {
     const navigation = nav();
     const resolveThreadId = vi.fn(async () => 'T1');
     await handleDeepLink(
@@ -188,14 +197,25 @@ describe('handleDeepLink', () => {
     );
     expect(resolveThreadId).toHaveBeenCalledWith('M1', 'team');
     expect(navigation.navigate).toHaveBeenCalledWith('EmailThread', { emailId: 'M1', threadId: 'T1', jmapAccountId: 'team' });
+  });
 
-    const openReply = vi.fn(async () => true);
+  it('opens a reply over its message, without a lookup when the link names the thread', async () => {
+    // Offline, or before the session is back: the lookup would fail.
+    const resolveThreadId = vi.fn(async () => null);
+    const navigation = nav();
     const ok = await handleDeepLink(
-      { kind: 'message', emailId: 'M2', action: 'reply' },
-      { navigation: nav() as never, resolveThreadId, openReply },
+      { kind: 'message', emailId: 'M2', threadId: 'T2', action: 'reply' },
+      { navigation: navigation as never, resolveThreadId },
     );
     expect(ok).toBe(true);
-    expect(openReply).toHaveBeenCalledWith('M2', undefined);
+    expect(resolveThreadId).not.toHaveBeenCalled();
+    expect(navigation.navigate).toHaveBeenCalledWith('EmailThread', { emailId: 'M2', threadId: 'T2', action: 'reply' });
+
+    // Without the thread and without a server, nothing opens (the app says so).
+    expect(await handleDeepLink(
+      { kind: 'message', emailId: 'M3', action: 'reply' },
+      { navigation: nav() as never, resolveThreadId },
+    )).toBe(false);
   });
 
   it('opens drafts, unified views, scheduled mail and searches', async () => {

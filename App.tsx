@@ -58,10 +58,11 @@ import { useCalendarStore } from './src/stores/calendar-store';
 import { useContactsStore } from './src/stores/contacts-store';
 import { useEmailStore, viewerParamsForRow } from './src/stores/email-store';
 import { mailboxAccountId } from './src/lib/mailbox-tree';
-import { prefetchMessage } from './src/lib/email-detail-cache';
+import { loadDetail, prefetchMessage } from './src/lib/email-detail-cache';
 import { useHasCalendar, useHasContacts, useHasFiles } from './src/lib/capabilities';
 import { useSettingsStore } from './src/stores/settings-store';
 import { useLocaleStore } from './src/stores/locale-store';
+import { toast } from './src/stores/toast-store';
 import { useNetworkStore } from './src/stores/network-store';
 import { useUpdatesStore } from './src/stores/updates-store';
 import { UpdateBanner } from './src/components/UpdateBanner';
@@ -69,10 +70,9 @@ import { PushOnboardingPrompt } from './src/components/PushOnboardingPrompt';
 import { ToastHost } from './src/components/ToastHost';
 import { UndoSnackbar } from './src/components/UndoSnackbar';
 import { AppIconBadge } from './src/components/AppIconBadge';
-import { getEmails, getFullEmail } from './src/api/email';
+import { getEmails } from './src/api/email';
 import { signOutWidgets, startWidgetSync } from './src/widgets/sync';
 import { draftContextFromEmail } from './src/lib/draft-context';
-import { replyComposeParams } from './src/lib/reply-compose';
 import { handleDeepLink, parseDeepLink, shareToDeepLink, type DeepLink } from './src/navigation/linking';
 import { addShareListener, getInitialShare, shareAttachments } from './src/lib/share-intent';
 import { OfflineCacheBanner } from './src/components/OfflineCacheBanner';
@@ -134,7 +134,7 @@ async function openCalendarReminder(target: CalendarReminderTarget): Promise<voi
 // Deep links (bulwarkmobile://, webmail https permalinks, mailto:) and
 // Android share-sheet payloads all end up here once the navigator is ready.
 async function openDeepLink(link: DeepLink): Promise<void> {
-  await handleDeepLink(link, {
+  const opened = await handleDeepLink(link, {
     navigation: navigationRef,
     resolveThreadId: async (emailId, jmapAccountId) => {
       try {
@@ -144,19 +144,10 @@ async function openDeepLink(link: DeepLink): Promise<void> {
         return null;
       }
     },
-    openReply: async (emailId, jmapAccountId) => {
-      try {
-        const params = replyComposeParams('reply', await getFullEmail(emailId, jmapAccountId), jmapAccountId);
-        if (!params || !navigationRef.isReady()) return false;
-        navigationRef.navigate('Compose', params);
-        return true;
-      } catch {
-        return false;
-      }
-    },
     openDraft: async (emailId, jmapAccountId) => {
       try {
-        const draft = draftContextFromEmail(await getFullEmail(emailId, jmapAccountId), jmapAccountId);
+        // Cache first, so a draft read before still opens offline.
+        const draft = draftContextFromEmail(await loadDetail(emailId, jmapAccountId), jmapAccountId);
         if (!navigationRef.isReady()) return false;
         navigationRef.navigate('Compose', { draft });
         return true;
@@ -172,6 +163,9 @@ async function openDeepLink(link: DeepLink): Promise<void> {
       return useAuthStore.getState().activeAccountId === accountId;
     },
   });
+  // A widget or a link elsewhere brought the app up for this; say it failed
+  // rather than leave the user wondering why the app just opened.
+  if (!opened) toast.error(useLocaleStore.getState().t('deep_link.open_failed', "Couldn't open this"));
 }
 
 // Toasts and the undo bar show on whichever stack screen is up, so a failure

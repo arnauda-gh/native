@@ -184,7 +184,7 @@ export async function fetchMailSection(
     calls.push(['Email/get', {
       accountId,
       '#ids': { resultOf: 'qa', name: 'Email/query', path: '/ids' },
-      properties: ['id', 'from', 'receivedAt', 'attachments'],
+      properties: ['id', 'threadId', 'from', 'receivedAt', 'attachments'],
       bodyProperties: ['name', 'type', 'disposition', 'cid', 'size'],
     }, 'ga']);
   }
@@ -221,6 +221,7 @@ export async function fetchMailSection(
   }>)
     .map((e) => ({
       emailId: e.id,
+      threadId: e.threadId,
       accountId: registryAccountId,
       fromName: e.from?.[0]?.name || e.from?.[0]?.email || '',
       receivedAt: Date.parse(e.receivedAt) || 0,

@@ -19,8 +19,9 @@ type UnifiedView = typeof UNIFIED_VIEWS[number];
 
 export type DeepLink =
   // `jmapAccountId`: the JMAP account owning a message in a group/shared
-  // mailbox (`?jmapAccount=`); `action: 'reply'` opens a reply to it.
-  | { kind: 'message'; emailId: string; accountId?: string; jmapAccountId?: string; action?: 'reply' }
+  // mailbox (`?jmapAccount=`); `threadId` (`?thread=`) saves looking it up;
+  // `action: 'reply'` opens a reply to it.
+  | { kind: 'message'; emailId: string; accountId?: string; jmapAccountId?: string; threadId?: string; action?: 'reply' }
   | { kind: 'draft'; emailId: string; accountId?: string; jmapAccountId?: string }
   | { kind: 'thread'; threadId: string; accountId?: string }
   | { kind: 'folder'; ref: string; accountId?: string }
@@ -96,11 +97,13 @@ export function parseDeepLink(url: string): DeepLink | null {
     case 'mail': {
       const jmapAccountId = search.get('jmapAccount') ?? undefined;
       if (kind === 'message' && value) {
+        const threadId = search.get('thread');
         return {
           kind: 'message',
           emailId: decodeSegment(value),
           accountId,
           ...(jmapAccountId ? { jmapAccountId } : {}),
+          ...(threadId ? { threadId } : {}),
           ...(search.get('action') === 'reply' ? { action: 'reply' as const } : {}),
         };
       }
@@ -169,9 +172,8 @@ export interface DeepLinkNavigator {
   // null when the message cannot be loaded. `jmapAccountId` names the
   // group/shared account holding it, when it is not the user's own.
   resolveThreadId: (emailId: string, jmapAccountId?: string) => Promise<string | null>;
-  // Open the composer on a reply to / on a server draft of this message.
-  // Resolve false when the message cannot be loaded.
-  openReply?: (emailId: string, jmapAccountId?: string) => Promise<boolean>;
+  // Open the composer on a server draft. Resolve false when the draft cannot
+  // be loaded.
   openDraft?: (emailId: string, jmapAccountId?: string) => Promise<boolean>;
   // Switch to the account a permalink names (`?account=`); resolves false
   // when that account is not signed in on this device.
@@ -189,15 +191,16 @@ export async function handleDeepLink(link: DeepLink, nav: DeepLinkNavigator): Pr
 
   switch (link.kind) {
     case 'message': {
-      if (link.action === 'reply' && nav.openReply) {
-        return nav.openReply(link.emailId, link.jmapAccountId);
-      }
-      const threadId = await nav.resolveThreadId(link.emailId, link.jmapAccountId);
+      const threadId = link.threadId ?? await nav.resolveThreadId(link.emailId, link.jmapAccountId);
       if (!threadId) return false;
+      // A reply opens over the message, like the reader's own Reply: the
+      // reader loads it (from its cache when offline) and then opens the
+      // composer, or shows why it could not.
       navigation.navigate('EmailThread', {
         emailId: link.emailId,
         threadId,
         ...(link.jmapAccountId ? { jmapAccountId: link.jmapAccountId } : {}),
+        ...(link.action === 'reply' ? { action: 'reply' as const } : {}),
       });
       return true;
     }

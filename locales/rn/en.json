@@ -249,6 +249,9 @@
     "color_tag": "Tag",
     "remove_color": "Remove tag"
   },
+  "deep_link": {
+    "open_failed": "Couldn't open this"
+  },
   "email_composer": {
     "attach_camera": "Camera",
     "attachment_reminder_body": "Your message mentions \"{keyword}\" but no file is attached. Send anyway?",

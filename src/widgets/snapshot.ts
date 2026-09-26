@@ -75,6 +75,8 @@ export interface TagCount {
 
 export interface AttachmentGroup {
   emailId: string;
+  /** Absent in snapshots stored before it was kept. */
+  threadId?: string;
   accountId: string;
   fromName: string;
   receivedAt: number;

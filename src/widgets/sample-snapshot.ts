@@ -157,9 +157,9 @@ export function sampleSnapshot(now: number): WidgetSnapshot {
       recentSearches: ['from:sarah', 'invoice', 'has:attachment', 'Q4 timeline', 'is:unread'],
       tags: [{ keyword: '$label:receipts', name: 'Receipts', color: '#f97316', unread: 2, total: 14, latestFrom: 'Sarah Kim', latestAt: ago(46) }],
       attachments: [
-        { emailId: 'm2', accountId: 'demo@example.com@demo', fromName: 'Sarah Kim', receivedAt: ago(46),
+        { emailId: 'm2', threadId: 't-m2', accountId: 'demo@example.com@demo', fromName: 'Sarah Kim', receivedAt: ago(46),
           files: [{ name: 'Invoice-2024-089.pdf', type: 'application/pdf' }, { name: 'prototype-v3.png', type: 'image/png' }] },
-        { emailId: 'm7', accountId: 'demo@example.com@demo', fromName: 'Anna Kowalski', receivedAt: ago(60 * 48),
+        { emailId: 'm7', threadId: 't-m7', accountId: 'demo@example.com@demo', fromName: 'Anna Kowalski', receivedAt: ago(60 * 48),
           files: [{ name: 'wedding-001.jpg', type: 'image/jpeg' }, { name: 'wedding-014.jpg', type: 'image/jpeg' }, { name: 'wedding-038.jpg', type: 'image/jpeg' }] },
       ],
     },

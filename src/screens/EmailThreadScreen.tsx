@@ -536,6 +536,15 @@ function EmailViewer({ route, navigation }: Props) {
     if (params) navigation.navigate('Compose', params);
   }, [email, navigation, ownerAccountId]);
 
+  // Opened to reply (a widget's Reply): the composer follows as soon as the
+  // message is here, once. If it never loads, the reader's error says why.
+  const replyPending = React.useRef(route.params.action === 'reply');
+  React.useEffect(() => {
+    if (!replyPending.current || email?.id !== route.params.emailId) return;
+    replyPending.current = false;
+    navigateCompose('reply', email);
+  }, [email, route.params.emailId, navigateCompose]);
+
   // Forward the raw message as a message/rfc822 attachment (webmail 1.8.1).
   const onForwardAsAttachment = () => {
     setMoreMenuOpen(false);

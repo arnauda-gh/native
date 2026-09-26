@@ -616,7 +616,7 @@ export const AttachmentsLayout: Layout = ({ s, p, f, now, width, height }) => {
         return (
           <FlexWidget
             key={g.emailId}
-            {...open(links.message({ id: g.emailId, accountId: g.accountId }))}
+            {...open(links.message({ id: g.emailId, threadId: g.threadId, accountId: g.accountId }))}
             style={{
               width: 'match_parent',
               paddingHorizontal: 14,

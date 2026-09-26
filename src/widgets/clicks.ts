@@ -37,12 +37,16 @@ function query(params: Record<string, string | undefined>): string {
   return parts.length ? `?${parts.join('&')}` : '';
 }
 
+// Message links carry the thread so the app opens them without asking the
+// server first, which also works offline from its cache.
+type MessageRef = Pick<MailItem, 'id' | 'accountId' | 'jmapAccountId'> & { threadId?: string };
+
 export const links = {
   inbox: () => `${base}mail/folder/inbox`,
-  message: (m: Pick<MailItem, 'id' | 'accountId' | 'jmapAccountId'>) =>
-    `${base}mail/message/${enc(m.id)}${query({ account: m.accountId, jmapAccount: m.jmapAccountId })}`,
-  reply: (m: Pick<MailItem, 'id' | 'accountId' | 'jmapAccountId'>) =>
-    `${base}mail/message/${enc(m.id)}${query({ account: m.accountId, jmapAccount: m.jmapAccountId, action: 'reply' })}`,
+  message: (m: MessageRef) =>
+    `${base}mail/message/${enc(m.id)}${query({ account: m.accountId, jmapAccount: m.jmapAccountId, thread: m.threadId })}`,
+  reply: (m: MessageRef) =>
+    `${base}mail/message/${enc(m.id)}${query({ account: m.accountId, jmapAccount: m.jmapAccountId, thread: m.threadId, action: 'reply' })}`,
   draft: (m: Pick<MailItem, 'id' | 'accountId' | 'jmapAccountId'>) =>
     `${base}mail/draft/${enc(m.id)}${query({ account: m.accountId, jmapAccount: m.jmapAccountId })}`,
   unified: (params: { view?: 'all' | 'unread' | 'starred'; role?: string } = {}) =>
