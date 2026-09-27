@@ -296,7 +296,7 @@ describe('device sync engine with the real planners', () => {
     });
   });
 
-  describe('a deletion the teardown uploads', () => {
+  describe('a deletion decided on the server version', () => {
     /** The contacts planner as fixed for data finding 4: a deleted contact's shadow follows the server. */
     function refreshingDeletedShadows(h: Harness): void {
       h.deps.planners = {
@@ -313,7 +313,7 @@ describe('device sync engine with the real planners', () => {
       };
     }
 
-    it('is decided on the server version when the server changed since the last sync', async () => {
+    it('in a teardown, when the server changed since the last sync', async () => {
       const h = real();
       const archive = h.server.addAddressBook('a', { name: 'Archive' });
       h.prefs.contactsSelection[`a/${archive}`] = false;
@@ -330,7 +330,51 @@ describe('device sync engine with the real planners', () => {
       expect((h.server.get('ContactCard', 'a', ada)!.addressBookIds as object)).not.toHaveProperty(h.book);
     });
 
-    it('waits, with the edits, while no state guards the upload (the first sync never ended)', async () => {
+    it('lets the planner see the server version of a contact deleted on the device and filed away meanwhile', async () => {
+      const h = real();
+      const archive = h.server.addAddressBook('a', { name: 'Archive' });
+      h.prefs.contactsSelection[`a/${archive}`] = false;
+      const [ada] = addServerCards(h, ['Ada Lovelace']);
+      await h.run();
+      refreshingDeletedShadows(h);
+      const planned: string[][] = [];
+      const contacts = h.deps.planners.contacts;
+      h.deps.planners = {
+        ...h.deps.planners,
+        contacts: {
+          ...contacts,
+          planUpload: (local, ctx) => {
+            if (local.deleted) planned.push(Object.keys(local.shadow?.addressBookIds ?? {}));
+            return contacts.planUpload(local, ctx);
+          },
+        },
+      };
+      h.device.user.deleteContact(h.contactNamed('Ada Lovelace')!.id);
+      // Another client files Ada in Archive only: she left every synced book.
+      h.server.serverUpdate('ContactCard', 'a', ada, { addressBookIds: { [archive]: true } });
+
+      expect((await h.run()).outcome).toBe('ok');
+
+      expect(planned).toEqual([[archive]]);
+    });
+
+    it('still uploads the deletion of an event whose calendar the planner cannot place', async () => {
+      const h = real();
+      const archive = h.server.addCalendar('a', { name: 'Archive' });
+      h.prefs.calendarSelection[`a/${archive}`] = false;
+      const lunch = h.server.addEvent('a', { uid: 'lunch-uid', title: 'Lunch', start: '2026-10-06T12:00:00', duration: 'PT1H', timeZone: 'Europe/Berlin', calendarIds: { [h.calendar]: true } });
+      await h.run(CALENDAR_AUTHORITY);
+      h.device.user.deleteEvent(Number(h.events()[0]._id));
+      h.server.serverUpdate('CalendarEvent', 'a', lunch, { calendarIds: { [archive]: true } });
+
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { deleted: 1 } } });
+      expect(h.server.get('CalendarEvent', 'a', lunch)).toBeUndefined();
+      expect(h.events()).toEqual([]);
+    });
+
+    it('waits in a teardown, with the edits, while no state guards the upload (the first sync never ended)', async () => {
       const h = real();
       const [ada] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper', ...Array.from({ length: 60 }, (_, i) => `P${i}`)]);
       // The first sync (a full reconcile) runs out of time after its first chunk (Ada and Grace): no state yet.

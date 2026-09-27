@@ -164,14 +164,6 @@ export abstract class ItemSync {
   protected dependents(_kind: Kind, _acct: string, _object: ServerObject): string[] {
     return [];
   }
-
-  private staleWith(acct: string, ids: string[]): StateChange | undefined {
-    if (!ids.length) return undefined;
-    return (next) => {
-      const account = accountOf(next, acct);
-      account.stale = [...new Set([...account.stale, ...ids])];
-    };
-  }
   protected onDiscard(_next: SyncState, _accounts: Set<string>): void {}
   /** Whether a pending create of `target` may adopt this object (contacts: the target book holds it). */
   protected adoptionTargetMatches(acct: string, _object: ServerObject, target: string): boolean {
@@ -277,6 +269,15 @@ export abstract class ItemSync {
 
   protected markResolved(acct: string, id: string): void {
     if (this.marks(acct).has(id) || this.env.store.account(acct).stale.includes(id)) this.marks(acct).set(id, false);
+  }
+
+  /** Puts `ids` on `stale` in the batch whose rows make them outdated (see `dependents`). */
+  private staleWith(acct: string, ids: string[]): StateChange | undefined {
+    if (!ids.length) return undefined;
+    return (next) => {
+      const account = accountOf(next, acct);
+      account.stale = [...new Set([...account.stale, ...ids])];
+    };
   }
 
   protected isStale(acct: string, sourceId: string | null): boolean {
@@ -638,10 +639,18 @@ export abstract class ItemSync {
     if (!kind || !this.inSelection(acct, object)) {
       if (!found) return null;
       const meta = found.kind.meta(found.local);
-      if (found.kind === kind && meta.dirty && !meta.deleted && !meta.isNew) {
-        // Uploaded first, dropped afterwards: merged like any dirty item, so the upload builds on the server's version.
+      if (found.kind === kind && (meta.dirty || meta.deleted) && !meta.isNew) {
+        // Uploaded first, dropped afterwards: merged like any changed item (a deleted one's shadow follows
+        // too), so the upload builds on the server's version.
         this.outsideOf(acct).add(refOf(acct, object.id));
-        return this.downloadWork(kind, acct, object, found.local, written);
+        if (!meta.deleted) return this.downloadWork(kind, acct, object, found.local, written);
+        try {
+          return this.downloadWork(kind, acct, object, found.local, written);
+        } catch (error) {
+          // A planner that cannot place it (no synced calendar) leaves the deletion as it was planned.
+          this.env.log(`deleted ${refOf(acct, object.id)} outside the selection keeps its shadow`, error);
+          return null;
+        }
       }
       return this.removeWork(acct, object.id, found, 'outside');
     }
