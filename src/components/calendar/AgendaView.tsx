@@ -47,6 +47,8 @@ interface AgendaViewProps {
   /** Reports the first day in view as the user scrolls. */
   onVisibleDateChange?: (date: Date) => void;
   timeFormat?: TimeFormat;
+  /** The user's addresses, to draw events they declined as inactive. */
+  currentUserEmails?: string[];
   onSelectEvent?: (event: CalendarEvent) => void;
 }
 
@@ -90,6 +92,7 @@ export function AgendaView({
   isLoading = false,
   onVisibleDateChange,
   timeFormat,
+  currentUserEmails,
   onSelectEvent,
 }: AgendaViewProps) {
   const c = useColors();
@@ -324,7 +327,13 @@ export function AgendaView({
       }}
       renderItem={({ item }) => (
         <View style={styles.itemWrap}>
-          <EventCard event={item} calendars={calendars} timeFormat={timeFormat} onPress={onSelectEvent} />
+          <EventCard
+            event={item}
+            calendars={calendars}
+            timeFormat={timeFormat}
+            currentUserEmails={currentUserEmails}
+            onPress={onSelectEvent}
+          />
         </View>
       )}
       renderSectionFooter={({ section }) =>

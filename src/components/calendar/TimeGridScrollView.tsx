@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { differenceInCalendarDays, format, type Locale } from 'date-fns';
 import type { Calendar, CalendarEvent } from '../../api/types';
-import { radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
+import { spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { useCalendarLocale } from '../../lib/calendar-locale';
 import {
@@ -33,6 +33,8 @@ import {
 } from '../../lib/calendar-utils';
 import type { CalendarFocus, DayRange } from '../../lib/calendar-scroll-window';
 import { displayNow, displayNowMinutes } from '../../lib/calendar-timezone';
+import { isInactiveEvent } from '../../lib/calendar-participants';
+import { eventBlockColors } from '../../lib/event-colors';
 import {
   buildAllDaySegments,
   headerColumnRange,
@@ -41,6 +43,7 @@ import {
   windowDays,
   type TimeGridMode,
 } from '../../lib/calendar-time-grid';
+import { AllDayEventBar, TIME_LINE_MIN_MINUTES, TimedEventBlock } from './EventBlock';
 
 const HOUR_HEIGHT = 48;
 const GRID_HEIGHT = 24 * HOUR_HEIGHT;
@@ -67,6 +70,8 @@ interface TimeGridScrollViewProps {
   eventsByDay?: EventDayIndex;
   weekStartsOn?: WeekStart;
   timeFormat?: TimeFormat;
+  /** The user's addresses, to draw events they declined as inactive. */
+  currentUserEmails?: string[];
   /** Widen the window at the start; omitted once the limit is reached. */
   onExtendStart?: () => void;
   /** Widen the window at the end; omitted once the limit is reached. */
@@ -98,6 +103,7 @@ function TimeGridScrollViewInner({
   eventsByDay,
   weekStartsOn = 0,
   timeFormat = '24h',
+  currentUserEmails,
   onExtendStart,
   onExtendEnd,
   onVisibleDateChange,
@@ -301,12 +307,17 @@ function TimeGridScrollViewInner({
         nowMinutes={dayKey(day) === todayKey ? nowMinutes : -1}
         calendars={calendars}
         timeFormat={timeFormat}
+        currentUserEmails={currentUserEmails}
+        colors={c}
         styles={styles}
         onSelectEvent={onSelectEvent}
         onLongPressAt={onCreateAtTime ? handleLongPressAt : undefined}
       />
     ),
-    [layoutsFor, colWidth, todayKey, nowMinutes, calendars, timeFormat, styles, onSelectEvent, onCreateAtTime, handleLongPressAt],
+    [
+      layoutsFor, colWidth, todayKey, nowMinutes, calendars, timeFormat, currentUserEmails, c, styles,
+      onSelectEvent, onCreateAtTime, handleLongPressAt,
+    ],
   );
 
   const getItemLayout = React.useCallback(
@@ -379,34 +390,26 @@ function TimeGridScrollViewInner({
             ]}
           >
             {headerCells}
-            {visibleSegments.map((segment) => {
-              const color = getEventColor(segment.event, calendars);
-              return (
-                <Pressable
-                  key={`${segment.event.id}:${segment.startIndex}:${segment.row}`}
-                  onPress={() => onSelectEvent?.(segment.event)}
-                  style={[
-                    styles.allDayChip,
-                    {
-                      left: segment.startIndex * colWidth + 1,
-                      width: segment.span * colWidth - 2,
-                      top: HEADER_HEIGHT + 2 + segment.row * (ALL_DAY_CHIP_HEIGHT + ALL_DAY_GAP),
-                      backgroundColor: color + '33',
-                      borderLeftColor: color,
-                      borderTopLeftRadius: segment.continuesBefore ? 0 : radius.xs,
-                      borderBottomLeftRadius: segment.continuesBefore ? 0 : radius.xs,
-                      borderTopRightRadius: segment.continuesAfter ? 0 : radius.xs,
-                      borderBottomRightRadius: segment.continuesAfter ? 0 : radius.xs,
-                    },
-                  ]}
-                >
-                  <Text style={styles.allDayChipText} numberOfLines={1}>
-                    {segment.continuesBefore ? '… ' : ''}
-                    {segment.event.title || t('calendar.events.no_title', '(No title)')}
-                  </Text>
-                </Pressable>
-              );
-            })}
+            {visibleSegments.map((segment) => (
+              <AllDayEventBar
+                key={`${segment.event.id}:${segment.startIndex}:${segment.row}`}
+                title={segment.event.title || t('calendar.events.no_title', '(No title)')}
+                colors={eventBlockColors(
+                  getEventColor(segment.event, calendars),
+                  isInactiveEvent(segment.event, currentUserEmails),
+                  c,
+                )}
+                continuesBefore={segment.continuesBefore}
+                continuesAfter={segment.continuesAfter}
+                onPress={() => onSelectEvent?.(segment.event)}
+                style={{
+                  left: segment.startIndex * colWidth + 1,
+                  width: segment.span * colWidth - 2,
+                  top: HEADER_HEIGHT + 2 + segment.row * (ALL_DAY_CHIP_HEIGHT + ALL_DAY_GAP),
+                  height: ALL_DAY_CHIP_HEIGHT,
+                }}
+              />
+            ))}
           </Animated.View>
         </View>
       </View>
@@ -526,6 +529,8 @@ const DayColumn = React.memo(function DayColumn({
   nowMinutes,
   calendars,
   timeFormat,
+  currentUserEmails,
+  colors,
   styles,
   onSelectEvent,
   onLongPressAt,
@@ -537,6 +542,8 @@ const DayColumn = React.memo(function DayColumn({
   nowMinutes: number;
   calendars: Calendar[];
   timeFormat: TimeFormat;
+  currentUserEmails?: string[];
+  colors: ThemePalette;
   styles: GridStyles;
   onSelectEvent?: (event: CalendarEvent) => void;
   onLongPressAt?: (day: Date, hour: number) => void;
@@ -553,36 +560,28 @@ const DayColumn = React.memo(function DayColumn({
       style={[styles.dayCol, { width }]}
       onLongPress={onLongPressAt ? handleLongPress : undefined}
     >
-      {layouts.map(({ event, column, totalColumns, startMinutes, endMinutes }) => {
+      {layouts.map(({ event, column, totalColumns, startMinutes, endMinutes, continuesBefore, continuesAfter }) => {
         const top = (startMinutes / 60) * HOUR_HEIGHT;
         const height = Math.max(20, ((endMinutes - startMinutes) / 60) * HOUR_HEIGHT - 1);
         const widthPct = 100 / totalColumns;
-        const color = getEventColor(event, calendars);
         return (
-          <Pressable
+          <TimedEventBlock
             key={event.id}
-            onPress={() => onSelectEvent?.(event)}
-            style={[
-              styles.eventBlock,
-              {
-                top,
-                height,
-                left: `${column * widthPct}%`,
-                width: `${widthPct}%`,
-                backgroundColor: color + '33',
-                borderLeftColor: color,
-              },
-            ]}
-          >
-            <Text style={styles.eventBlockTitle} numberOfLines={1}>
-              {event.title || t('calendar.events.no_title', '(No title)')}
-            </Text>
-            {height > 32 && (
-              <Text style={styles.eventBlockTime} numberOfLines={1}>
-                {minutesToTimeLabel(startMinutes, timeFormat)}
-              </Text>
+            title={event.title || t('calendar.events.no_title', '(No title)')}
+            timeLabel={endMinutes - startMinutes >= TIME_LINE_MIN_MINUTES
+              ? minutesToTimeLabel(startMinutes, timeFormat)
+              : null}
+            colors={eventBlockColors(
+              getEventColor(event, calendars),
+              isInactiveEvent(event, currentUserEmails),
+              colors,
             )}
-          </Pressable>
+            ringColor={colors.background}
+            continuesBefore={continuesBefore}
+            continuesAfter={continuesAfter}
+            onPress={() => onSelectEvent?.(event)}
+            style={{ top, height, left: `${column * widthPct}%`, width: `${widthPct}%` }}
+          />
         );
       })}
       {nowMinutes >= 0 && (
@@ -649,14 +648,6 @@ function makeStyles(c: ThemePalette) {
 
   allDayLabelWrap: { alignItems: 'flex-end', justifyContent: 'flex-start', paddingRight: 4, paddingTop: 2 },
   allDayLabel: { ...typography.small, color: c.textMuted, textAlign: 'right' },
-  allDayChip: {
-    position: 'absolute',
-    height: ALL_DAY_CHIP_HEIGHT,
-    borderLeftWidth: 2,
-    paddingHorizontal: 4,
-    justifyContent: 'center',
-  },
-  allDayChipText: { fontSize: 10, color: c.text, fontWeight: '500' },
 
   vScroll: { flex: 1 },
   gridRow: { flexDirection: 'row', height: GRID_HEIGHT },
@@ -678,16 +669,6 @@ function makeStyles(c: ThemePalette) {
     borderLeftWidth: 1,
     borderLeftColor: c.border,
   },
-  eventBlock: {
-    position: 'absolute',
-    borderRadius: radius.xs,
-    borderLeftWidth: 2,
-    paddingHorizontal: 3,
-    paddingVertical: 2,
-    overflow: 'hidden',
-  },
-  eventBlockTitle: { fontSize: 10, color: c.text, fontWeight: '600' },
-  eventBlockTime: { fontSize: 9, color: c.textMuted, marginTop: 1 },
   nowLine: {
     position: 'absolute',
     left: -3,

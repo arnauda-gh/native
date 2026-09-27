@@ -1050,6 +1050,7 @@ export default function CalendarScreen() {
             showWeekNumbers={calendarShowWeekNumbers}
             showTimeInMonthView={calendarShowTimeInMonth}
             timeFormat={calendarTimeFormat}
+            currentUserEmails={currentUserEmails}
             onSelectDate={handleSelectDate}
             onLongPressDate={openCreate}
           />
@@ -1065,6 +1066,7 @@ export default function CalendarScreen() {
             showWeekNumbers={calendarShowWeekNumbers}
             showTimeInMonthView={calendarShowTimeInMonth}
             timeFormat={calendarTimeFormat}
+            currentUserEmails={currentUserEmails}
             onSelectDate={handleSelectDate}
             onLongPressDate={openCreate}
           />
@@ -1084,6 +1086,7 @@ export default function CalendarScreen() {
             calendars={calendars}
             weekStartsOn={calendarFirstDayOfWeek}
             timeFormat={calendarTimeFormat}
+            currentUserEmails={currentUserEmails}
             onSelectDate={handleSelectDate}
             onSelectEvent={handleSelectEvent}
             onCreateAtTime={openCreate}
@@ -1098,6 +1101,7 @@ export default function CalendarScreen() {
             calendars={calendars}
             weekStartsOn={calendarFirstDayOfWeek}
             timeFormat={calendarTimeFormat}
+            currentUserEmails={currentUserEmails}
             onSelectDate={handleSelectDate}
             onSelectEvent={handleSelectEvent}
             onCreateAtTime={openCreate}
@@ -1118,6 +1122,7 @@ export default function CalendarScreen() {
             eventsByDay={eventsByDay}
             calendars={calendars}
             timeFormat={calendarTimeFormat}
+            currentUserEmails={currentUserEmails}
             onSelectEvent={handleSelectEvent}
           />
         )}
@@ -1137,6 +1142,7 @@ export default function CalendarScreen() {
               eventsByDay={eventsByDay}
               calendars={calendars}
               timeFormat={calendarTimeFormat}
+              currentUserEmails={currentUserEmails}
               onSelectEvent={handleSelectEvent}
               refreshing={refreshing}
               onRefresh={onRefresh}
@@ -1261,6 +1267,7 @@ function DayEventList({
   eventsByDay,
   calendars,
   timeFormat,
+  currentUserEmails,
   onSelectEvent,
   refreshing,
   onRefresh,
@@ -1269,6 +1276,7 @@ function DayEventList({
   eventsByDay: EventDayIndex;
   calendars: Calendar[];
   timeFormat?: TimeFormat;
+  currentUserEmails?: string[];
   onSelectEvent?: (event: CalendarEvent) => void;
   refreshing: boolean;
   onRefresh: () => void;
@@ -1307,6 +1315,7 @@ function DayEventList({
           event={event}
           calendars={calendars}
           timeFormat={timeFormat}
+          currentUserEmails={currentUserEmails}
           onPress={onSelectEvent}
         />
       ))}

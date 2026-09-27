@@ -7,6 +7,8 @@ import {
   getParticipantList,
   getStatusCounts,
   getUserParticipantId,
+  isDeclinedByUser,
+  isInactiveEvent,
   isOrganizer,
   seedAttendees,
 } from '../calendar-participants';
@@ -169,5 +171,33 @@ describe('getParticipantList dedupe, names and organizer status', () => {
         ghost: { name: 'No Address' },
       },
     })).toBe(3);
+  });
+});
+
+describe('isDeclinedByUser / isInactiveEvent', () => {
+  const declined: Partial<CalendarEvent> = {
+    participants: {
+      org: { email: 'alice@example.com', roles: { owner: true } },
+      dave: { calendarAddress: 'mailto:dave@example.com', roles: { attendee: true }, participationStatus: 'declined' },
+      bob: { email: 'bob@example.com', roles: { attendee: true }, participationStatus: 'accepted' },
+    },
+  };
+
+  it('matches any of the user addresses, case-insensitively', () => {
+    expect(isDeclinedByUser(declined, ['Dave@Example.com'])).toBe(true);
+    expect(isDeclinedByUser(declined, ['alias@example.com', 'dave@example.com'])).toBe(true);
+    expect(isDeclinedByUser(declined, ['bob@example.com'])).toBe(false);
+  });
+
+  it('is false without addresses or participants', () => {
+    expect(isDeclinedByUser(declined, [])).toBe(false);
+    expect(isDeclinedByUser(declined, undefined)).toBe(false);
+    expect(isDeclinedByUser({}, ['dave@example.com'])).toBe(false);
+  });
+
+  it('counts cancelled events as inactive too', () => {
+    expect(isInactiveEvent({ status: 'cancelled' }, undefined)).toBe(true);
+    expect(isInactiveEvent(declined, ['dave@example.com'])).toBe(true);
+    expect(isInactiveEvent({ ...declined, status: 'confirmed' }, ['bob@example.com'])).toBe(false);
   });
 });

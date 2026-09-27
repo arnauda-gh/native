@@ -53,6 +53,8 @@ interface MonthScrollViewProps {
   showWeekNumbers?: boolean;
   showTimeInMonthView?: boolean;
   timeFormat?: TimeFormat;
+  /** The user's addresses, to draw events they declined as inactive. */
+  currentUserEmails?: string[];
   /** Widen the window at the top; omitted once the limit is reached. */
   onExtendStart?: () => void;
   /** Widen the window at the bottom; omitted once the limit is reached. */
@@ -83,6 +85,7 @@ function MonthScrollViewInner({
   showWeekNumbers = false,
   showTimeInMonthView = false,
   timeFormat,
+  currentUserEmails,
   onExtendStart,
   onExtendEnd,
   onVisibleDateChange,
@@ -191,6 +194,7 @@ function MonthScrollViewInner({
           showWeekNumbers={showWeekNumbers}
           showTimeInMonthView={showTimeInMonthView}
           timeFormat={timeFormat}
+          currentUserEmails={currentUserEmails}
           labelMonths
           height={rowHeight}
           locale={locale}
@@ -209,6 +213,7 @@ function MonthScrollViewInner({
       showWeekNumbers,
       showTimeInMonthView,
       timeFormat,
+      currentUserEmails,
       rowHeight,
       locale,
       styles,

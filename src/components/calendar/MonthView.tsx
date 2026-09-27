@@ -12,7 +12,7 @@ import {
   type Locale,
 } from 'date-fns';
 import type { Calendar, CalendarEvent } from '../../api/types';
-import { componentSizes, radius, spacing, typography, type ThemePalette } from '../../theme/tokens';
+import { componentSizes, spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import {
   buildEventDayIndex,
@@ -24,6 +24,8 @@ import {
   type TimeFormat,
 } from '../../lib/calendar-utils';
 import { dayIndexIn, monthKeyOf, monthMask } from '../../lib/calendar-month-scroll';
+import { isInactiveEvent } from '../../lib/calendar-participants';
+import { eventBlockColors } from '../../lib/event-colors';
 import { useCalendarLocale } from '../../lib/calendar-locale';
 import { displayNow } from '../../lib/calendar-timezone';
 
@@ -33,6 +35,8 @@ type WeekStart = 0 | 1 | 6;
 // scrolling month uses them as fixed row heights.
 export const MONTH_ROW_HEIGHT = 54;
 export const MONTH_ROW_HEIGHT_CHIPS = 74;
+// Corner radius of event bars (repos/branding/APP.md).
+const EVENT_RADIUS = 2;
 
 interface MonthViewProps {
   currentDate: Date;
@@ -45,6 +49,8 @@ interface MonthViewProps {
   // Render compact event chips (title + start time) instead of dots (#666).
   showTimeInMonthView?: boolean;
   timeFormat?: TimeFormat;
+  /** The user's addresses, to draw events they declined as inactive. */
+  currentUserEmails?: string[];
   onSelectDate: (date: Date) => void;
   onLongPressDate?: (date: Date) => void;
 }
@@ -101,6 +107,8 @@ export interface MonthWeekRowProps {
   showWeekNumbers: boolean;
   showTimeInMonthView: boolean;
   timeFormat?: TimeFormat;
+  /** The user's addresses, to draw events they declined as inactive. */
+  currentUserEmails?: string[];
   /** Mark the first day of a month with the month's name (continuous scrolling). */
   labelMonths?: boolean;
   /** Fixed row height (continuous scrolling); natural height otherwise. */
@@ -122,6 +130,7 @@ function MonthWeekRowInner({
   showWeekNumbers,
   showTimeInMonthView,
   timeFormat,
+  currentUserEmails,
   labelMonths = false,
   height,
   locale,
@@ -129,6 +138,7 @@ function MonthWeekRowInner({
   onSelectDate,
   onLongPressDate,
 }: MonthWeekRowProps) {
+  const c = useColors();
   return (
     <View style={[styles.weekRow, height !== undefined && { height, overflow: 'hidden' }]}>
       {showWeekNumbers && (
@@ -197,17 +207,24 @@ function MonthWeekRowInner({
             {dayEvents.length > 0 && showTimeInMonthView && (
               <View style={styles.chipsCol}>
                 {visible.map((event, idx) => {
-                  const color = getEventColor(event, calendars);
-                  const cancelled = event.status === 'cancelled';
+                  // Solid bars in the calendar colour; declined and
+                  // cancelled events outlined (repos/branding/APP.md).
+                  const inactive = isInactiveEvent(event, currentUserEmails);
+                  const colors = eventBlockColors(getEventColor(event, calendars), inactive, c);
                   return (
-                    <View key={`${event.id}-${idx}`} style={[styles.chip, { backgroundColor: color }]}>
-                      <Text
-                        style={[styles.chipText, cancelled && styles.chipTextCancelled]}
-                        numberOfLines={1}
-                      >
+                    <View
+                      key={`${event.id}-${idx}`}
+                      style={[
+                        styles.chip,
+                        { backgroundColor: colors.fill },
+                        colors.border !== null && [styles.chipInactive, { borderColor: colors.border }],
+                      ]}
+                    >
+                      <Text style={[styles.chipText, { color: colors.text }]} numberOfLines={1}>
                         {event.showWithoutTime
-                          ? (event.title || '')
-                          : `${format(getEventStartDate(event), timePattern(timeFormat), { locale })} ${event.title || ''}`}
+                          ? null
+                          : `${format(getEventStartDate(event), timePattern(timeFormat), { locale })} `}
+                        <Text style={inactive && styles.chipTextInactive}>{event.title || ''}</Text>
                       </Text>
                     </View>
                   );
@@ -236,6 +253,7 @@ function MonthViewInner({
   showWeekNumbers = false,
   showTimeInMonthView = false,
   timeFormat,
+  currentUserEmails,
   onSelectDate,
   onLongPressDate,
 }: MonthViewProps) {
@@ -278,6 +296,7 @@ function MonthViewInner({
           showWeekNumbers={showWeekNumbers}
           showTimeInMonthView={showTimeInMonthView}
           timeFormat={timeFormat}
+          currentUserEmails={currentUserEmails}
           locale={locale}
           styles={styles}
           onSelectDate={onSelectDate}
@@ -349,12 +368,17 @@ function makeStyles(c: ThemePalette) {
   },
   chipsCol: { width: '100%', gap: 1, marginTop: 2, alignItems: 'stretch' },
   chip: {
-    borderRadius: radius.xs,
+    borderRadius: EVENT_RADIUS,
     paddingHorizontal: 2,
     paddingVertical: 1,
   },
-  chipText: { color: c.textInverse, fontSize: 9, lineHeight: 11 },
-  chipTextCancelled: { textDecorationLine: 'line-through' },
+  // The 1px outline takes the place of a pixel of padding, so outlined and
+  // solid bars are the same size.
+  chipInactive: { borderWidth: 1, paddingHorizontal: 1, paddingVertical: 0 },
+  // Colour comes from eventBlockColors(): computed from the calendar colour,
+  // never a theme colour.
+  chipText: { fontSize: 9, lineHeight: 11, fontWeight: '500' },
+  chipTextInactive: { textDecorationLine: 'line-through' },
   overflowText: {
     color: c.textMuted,
     fontSize: 9,
