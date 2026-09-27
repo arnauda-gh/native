@@ -26,10 +26,10 @@ import {
   type TeardownOptions,
 } from './engine';
 import { calendarPlanner } from './calendar/planner';
+import { contactsPlanner } from './contacts/planner';
 import { emptyStats } from './engine/report';
 import { openJmapPort } from './jmap/client-port';
 import { createProviderPort, finishRun, getSyncSettings, isRunCancelled, showSyncProblem } from './native';
-import type { ContactsPlanner } from './planner';
 import type { Authority, RunPayload, RunReport } from './types';
 
 // Mirrors the persist names of the locale and feed-subscription stores; read
@@ -38,13 +38,6 @@ const LOCALE_STORAGE_KEY = 'webmail:locale:v1';
 const SUBSCRIPTIONS_STORAGE_KEY = 'calendar-subscriptions';
 /** Where "sign in again" leads (the accounts pane), as for a registry eviction. */
 const SIGN_IN_URI = 'bulwarkmobile://settings/account';
-
-// The contacts planner lands in the next
-// commit. Until then a run fails before it touches a row.
-function notWired(): never {
-  throw new Error('Device sync planners are not wired into this build yet');
-}
-const contactsPlanner = new Proxy({}, { get: notWired }) as ContactsPlanner;
 
 /** Random numbers from the platform CSPRNG, buffered (uids and map keys of device-made items). */
 function secureRandom(): RandomSource {

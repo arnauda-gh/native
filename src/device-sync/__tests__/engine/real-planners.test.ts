@@ -1,0 +1,221 @@
+// The engine with the real contacts and calendar planners (not the toy
+// ones): the contract between them holds end to end. Mapping details are
+// the planners' own tests; these check what the engine guarantees.
+
+import { describe, expect, it } from 'vitest';
+import { Data, MimeType } from '../../android-columns';
+import { calendarPlanner } from '../../calendar/planner';
+import { contactsPlanner } from '../../contacts/planner';
+import {
+  addDeviceContact,
+  addServerCards,
+  CALENDAR_AUTHORITY,
+  createHarness,
+  rowWrites,
+  type Harness,
+} from './harness';
+
+function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
+  const h = createHarness(options);
+  h.deps.planners = { contacts: contactsPlanner, calendar: calendarPlanner };
+  return h;
+}
+
+/** A device edit of the display name only, as AOSP Contacts makes it (the provider fills the components). */
+function retypeName(h: Harness, rawContactId: number, name: string): void {
+  const row = h.nameDataRow(rawContactId)!;
+  h.device.user.updateData(Number(row._id), { [Data.DATA1]: name });
+}
+
+function serverUids(h: Harness): string[] {
+  return h.server.all('ContactCard', 'a').map((c) => String(c.uid));
+}
+
+describe('device sync engine with the real planners', () => {
+  it('syncs contacts both ways and writes nothing for its own echo', async () => {
+    const h = real();
+    const [, grace] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+    expect((await h.run()).outcome).toBe('ok');
+    expect(h.contacts().map((c) => c.name).sort()).toEqual(['Ada Lovelace', 'Grace Hopper']);
+
+    addDeviceContact(h, 'Hedy Lamarr');
+    h.device.user.deleteContact(h.contactNamed('Grace Hopper')!.id);
+    const up = await h.run();
+    expect(up).toMatchObject({ outcome: 'ok', itemErrors: [] });
+    expect(up.stats.uploaded).toMatchObject({ created: 1, deleted: 1 });
+    expect(h.server.get('ContactCard', 'a', grace)).toBeUndefined();
+    expect(h.contacts().every((c) => c.sourceId && !c.dirty)).toBe(true);
+    expect(new Set(serverUids(h)).size).toBe(2);
+
+    const before = h.batches.log.length;
+    const echo = await h.run();
+    expect(echo.outcome).toBe('ok');
+    expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
+  });
+
+  it('converges with the real contacts planner after a crash at any checkpoint', async () => {
+    const setup = async () => {
+      const h = real();
+      addServerCards(h, ['Ada Lovelace', 'Grace Hopper', 'Linus Torvalds']);
+      await h.run();
+      retypeName(h, h.contactNamed('Grace Hopper')!.id, 'Grace B. Hopper');
+      addDeviceContact(h, 'Hedy Lamarr');
+      h.device.user.deleteContact(h.contactNamed('Linus Torvalds')!.id);
+      h.server.serverUpdate('ContactCard', 'a', h.contactNamed('Ada Lovelace')!.sourceId!.split('/')[1], { 'name/full': 'Ada King' });
+      addServerCards(h, ['Margaret Hamilton']);
+      h.checkpoints.count = 0;
+      return h;
+    };
+    const probe = await setup();
+    await probe.run();
+    const final = probe.contacts().map((c) => c.name).sort();
+    const finalServer = probe.serverNames();
+    const checkpoints = probe.checkpoints.count;
+
+    for (let n = 1; n <= checkpoints; n++) {
+      const h = await setup();
+      h.checkpoints.crashAt = n;
+      await h.run();
+      h.checkpoints.crashAt = null;
+      const report = await h.run();
+      expect(report.outcome, `crash at checkpoint ${n}`).toBe('ok');
+      expect(h.contacts().map((c) => c.name).sort(), `device after crash ${n}`).toEqual(final);
+      expect(h.serverNames(), `server after crash ${n}`).toEqual(finalServer);
+      expect(h.contacts().every((c) => !c.dirty && !c.deleted)).toBe(true);
+      expect(new Set(serverUids(h)).size).toBe(serverUids(h).length);
+    }
+  });
+
+  it('adopts a lost create by uid with the real contacts planner', async () => {
+    const h = real();
+    addServerCards(h, ['Ada Lovelace']);
+    await h.run();
+    h.server.setUidIndexLag(3);
+    const id = addDeviceContact(h, 'Hedy Lamarr');
+    h.server.applyThenLoseResponse({ match: 'ContactCard/set' });
+
+    expect((await h.run()).outcome).toBe('io');
+    expect((await h.run()).outcome).toBe('ok');
+
+    expect(h.serverNames()).toEqual(['Ada Lovelace', 'Hedy Lamarr']);
+    expect(h.contacts()).toHaveLength(2);
+    expect(h.contacts().find((c) => c.id === id)).toMatchObject({ dirty: false, sourceId: expect.stringMatching(/^a\//) });
+    expect(h.device.rows('data').filter((d) => d.mimetype === MimeType.STRUCTURED_NAME)).toHaveLength(2);
+  });
+
+  it("follows a group's members when only the group card changed on the server", async () => {
+    const h = real();
+    const [ada, grace] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+    const uid = (id: string) => h.server.get('ContactCard', 'a', id)!.uid as string;
+    const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { [uid(ada)]: true } });
+    const members = () =>
+      h.device
+        .rows('data')
+        .filter((d) => d.mimetype === MimeType.GROUP_MEMBERSHIP)
+        .map((d) => h.contacts().find((c) => c.id === Number(d.raw_contact_id))?.name)
+        .sort();
+    expect((await h.run()).outcome).toBe('ok');
+    expect(members()).toEqual(['Ada Lovelace']);
+
+    h.server.serverUpdate('ContactCard', 'a', group, { members: { [uid(grace)]: true } });
+    expect((await h.run()).outcome).toBe('ok');
+
+    expect(members()).toEqual(['Grace Hopper']);
+    expect(h.contacts().every((c) => !c.dirty)).toBe(true);
+  });
+
+  it('creates a device event that carries the uid of a synced event (an app copied it) under a fresh uid', async () => {
+    const h = real();
+    const standup = h.server.addEvent('a', {
+      uid: 'standup-uid',
+      title: 'Standup',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT15M',
+      timeZone: 'Europe/Berlin',
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const rowId = Number(h.device.rows('calendars')[0]._id);
+
+    const copy = h.device.user.insertEvent(rowId, {
+      title: 'Standup (copy)',
+      dtstart: Date.UTC(2026, 8, 29, 7),
+      dtend: Date.UTC(2026, 8, 29, 7, 15),
+      eventTimezone: 'Europe/Berlin',
+      uid2445: 'standup-uid',
+    });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1 } } });
+    expect(h.server.get('CalendarEvent', 'a', standup)).toMatchObject({ title: 'Standup', uid: 'standup-uid' });
+    const created = h.server.all('CalendarEvent', 'a').find((e) => e.title === 'Standup (copy)')!;
+    expect(created.uid).not.toBe('standup-uid');
+    expect(h.events().find((e) => Number(e._id) === copy)).toMatchObject({ _sync_id: `a/${created.id}`, uid2445: created.uid });
+    expect(h.events().every((e) => Number(e.dirty ?? 0) === 0)).toBe(true);
+  });
+
+  it('uploads "this and following" in one run: the capped rule and the new series', async () => {
+    const h = real();
+    const series = h.server.addEvent('a', {
+      uid: 'series-uid',
+      title: 'Standup',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT15M',
+      timeZone: 'Europe/Berlin',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const master = h.events()[0];
+    expect(master).toMatchObject({ rrule: 'FREQ=DAILY' });
+    const rowId = Number(master.calendar_id);
+
+    // Etar: the master's rule ends before the split, a new series starts there (it copies the uid).
+    h.device.user.updateEvent(Number(master._id), { rrule: 'FREQ=DAILY;UNTIL=20260930T235959Z' });
+    const later = h.device.user.insertEvent(rowId, {
+      title: 'Standup',
+      dtstart: Date.UTC(2026, 9, 1, 7),
+      duration: 'P900S',
+      rrule: 'FREQ=DAILY',
+      eventTimezone: 'Europe/Berlin',
+      uid2445: 'series-uid',
+    });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1, updated: 1 } } });
+    const capped = h.server.get('CalendarEvent', 'a', series)!;
+    expect(capped.recurrenceRule).toMatchObject({ frequency: 'daily', until: expect.any(String) });
+    const next = h.server.all('CalendarEvent', 'a').find((e) => e.id !== series)!;
+    expect(next).toMatchObject({ start: '2026-10-01T09:00:00', timeZone: 'Europe/Berlin', recurrenceRule: { frequency: 'daily' } });
+    expect(next.uid).not.toBe('series-uid');
+    expect(h.events().find((e) => Number(e._id) === later)).toMatchObject({ _sync_id: `a/${next.id}` });
+    expect(h.events().every((e) => Number(e.dirty ?? 0) === 0)).toBe(true);
+  });
+
+  it('syncs events both ways and writes nothing for its own echo', async () => {
+    const h = real();
+    const standup = h.server.addEvent('a', {
+      uid: 'e1',
+      title: 'Standup',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT15M',
+      timeZone: 'Europe/Berlin',
+      calendarIds: { [h.calendar]: true },
+    });
+    expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+    const rowId = Number(h.device.rows('calendars')[0]._id);
+
+    h.device.user.insertEvent(rowId, { title: 'Lunch', dtstart: Date.UTC(2026, 8, 28, 10), dtend: Date.UTC(2026, 8, 28, 11), eventTimezone: 'Europe/Berlin' });
+    h.device.user.updateEvent(Number(h.events().find((e) => e.title === 'Standup')!._id), { title: 'Daily standup' });
+    const up = await h.run(CALENDAR_AUTHORITY);
+
+    expect(up).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1, updated: 1 } } });
+    expect(h.server.get('CalendarEvent', 'a', standup)).toMatchObject({ title: 'Daily standup' });
+    expect(h.server.all('CalendarEvent', 'a').find((e) => e.title === 'Lunch')).toMatchObject({ start: '2026-09-28T12:00:00', timeZone: 'Europe/Berlin' });
+    expect(h.events().every((e) => Number(e.dirty ?? 0) === 0 && String(e._sync_id).startsWith('a/'))).toBe(true);
+
+    const before = h.batches.log.length;
+    expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+    expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
+  });
+});
