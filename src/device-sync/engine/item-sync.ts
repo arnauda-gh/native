@@ -44,6 +44,19 @@ function both(first: StateChange | undefined, second: StateChange | undefined): 
   };
 }
 
+/** The work with one more state change, also after a re-plan. */
+function withState(work: Work, change: StateChange): Work {
+  const replan = work.replan;
+  return {
+    ...work,
+    state: both(work.state, change),
+    replan: replan && (async () => {
+      const next = await replan();
+      return next && withState(next, change);
+    }),
+  };
+}
+
 /** An item's upload, on its way to the server. */
 export interface Pending {
   held: Held;
@@ -324,10 +337,20 @@ export abstract class ItemSync {
 
   // ── Downloads ──
 
-  /** Objects put on `stale` by an earlier run: fetched again first (invariant 10). */
+  /**
+   * Objects put on `stale` by an earlier run (invariant 10), and objects our
+   * uploads created since the stored state (`/changes` from it omits one that
+   * was created and destroyed since): fetched again first.
+   */
   protected async refetchStale(acct: string): Promise<void> {
-    const ids = [...this.env.store.account(acct).stale];
-    if (ids.length) await this.processIds(acct, ids, [], () => undefined);
+    const account = this.env.store.account(acct);
+    const created = account.created ?? [];
+    const ids = [...new Set([...account.stale, ...created])];
+    if (!ids.length) return;
+    await this.processIds(acct, ids, [], (next) => {
+      const a = accountOf(next, acct);
+      a.created = (a.created ?? []).filter((id) => !created.includes(id));
+    });
   }
 
   /** `/changes` pages from the stored state; a full reconcile without one or after `cannotCalculateChanges`. */
@@ -1070,7 +1093,8 @@ export abstract class ItemSync {
     }
     await this.beforePlanning(acct, [object]);
     const work = this.downloadWork(p.held.kind, acct, object, p.held.local, null);
-    return work ? [work] : [];
+    // Our own earlier create: remembered like one of this run.
+    return work ? [withState(work, this.rememberCreated(acct, id))] : [];
   }
 
   /** Sends the items' actions in `/set` calls and settles each item once all its actions have an answer. */
@@ -1319,13 +1343,21 @@ export abstract class ItemSync {
       this.markStale(acct, server.id);
       this.env.report.itemError({ ref: refOf(acct, server.id), side: 'upload', type: reason, description: message });
     };
-    const state = this.listing(kind, acct, server.id, true);
+    const state = both(this.listing(kind, acct, server.id, true), created ? this.rememberCreated(acct, server.id) : undefined);
     return {
       group: withExtra(plan.ops),
       state,
       applied: counted,
       replan: async () => ({ group: withExtra(plan.keepDirtyOps), state, applied: counted, failed }),
       failed,
+    };
+  }
+
+  /** An object our upload created is remembered with its identity until the next run fetched it (see `refetchStale`). */
+  private rememberCreated(acct: string, id: string): StateChange {
+    return (next) => {
+      const account = accountOf(next, acct);
+      account.created = [...new Set([...(account.created ?? []), id])];
     };
   }
 

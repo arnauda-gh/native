@@ -29,6 +29,11 @@ export interface AccountState {
   selected: string[];
   /** Object ids whose rows could not be written; fetched again at the start of every run, nothing uploads for them meanwhile. */
   stale: string[];
+  /**
+   * Objects our uploads created after `itemsState`: fetched again at the start of the next run, since `/changes`
+   * omits an object created and destroyed after its `sinceState`.
+   */
+  created?: string[];
   reconcile: ReconcileMarker | null;
   /** Contacts: refs of the group cards present on the device (a hard-deleted group is found by its absence). */
   groups?: string[];
@@ -81,6 +86,7 @@ function parseAccount(value: unknown): AccountState {
     stale: strings(a.stale),
     reconcile: parseReconcile(a.reconcile),
   };
+  if (a.created !== undefined) out.created = strings(a.created);
   if (a.groups !== undefined) out.groups = strings(a.groups);
   if (a.taskOnly !== undefined) out.taskOnly = strings(a.taskOnly);
   return out;

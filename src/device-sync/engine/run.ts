@@ -48,7 +48,7 @@ function itemTypeOf(authority: Authority): string {
 /** Rows waiting for an upload (dirty, deleted, new), or state work a run must do whatever its extras. */
 export async function hasLocalWork(reader: ProviderReader, authority: Authority, state: SyncState): Promise<boolean> {
   for (const account of Object.values(state.accounts)) {
-    if (account.reconcile || account.stale.length) return true;
+    if (account.reconcile || account.stale.length || account.created?.length) return true;
   }
   if (authority === CALENDAR_AUTHORITY) {
     const rows = await reader.rows('events', ['_id'], "dirty = 1 OR deleted = 1 OR _sync_id IS NULL OR _sync_id LIKE '~pending/%'");
