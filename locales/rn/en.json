@@ -644,7 +644,7 @@
       "choose": "Choose",
       "choose_books_title": "Address books to sync",
       "choose_calendars_title": "Calendars to sync",
-      "collections_count": "{selected} of {total} sync",
+      "collections_count": "{selected, plural, one {# of {total} syncs} other {# of {total} sync}}",
       "continue": "Continue",
       "deletions_delete": "Delete on server",
       "deletions_message": "Many items were deleted on this device at once, so they were not deleted on the server. Delete them there as well, or bring them back on this device.",

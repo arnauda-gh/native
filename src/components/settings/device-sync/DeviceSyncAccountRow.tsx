@@ -288,7 +288,7 @@ export function DeviceSyncAccountRow({ account, authority }: Props) {
     : '';
 
   const collectionsDescription = collections && selectedKeys
-    ? t('settings.device_sync.collections_count', '{selected} of {total} sync', {
+    ? t('settings.device_sync.collections_count', '{selected, plural, one {# of {total} syncs} other {# of {total} sync}}', {
       selected: selectedKeys.length,
       total: collections.length,
     })
