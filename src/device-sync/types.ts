@@ -74,19 +74,38 @@ export interface ProviderRows {
 
 /**
  * One provider operation. `id` addresses one row of our account by `_id`;
- * `where`/`args` address a set (always ANDed with the account scope).
+ * `where`/`args` address a set (always ANDed with the account scope). With
+ * both, the op addresses the id row if it matches `where`. An op with `id`
+ * expects exactly one row unless `expectCount` says otherwise, so a row that
+ * vanished fails the batch with `assert`.
  *
  * - `insert.refs` maps a column to the index of an earlier `insert` in the
  *   same batch whose new row id fills it (ContentProviderOperation
  *   back-references), so one batch can create a raw contact and its data rows,
- *   or an event and its attendees.
+ *   or an event and its attendees. A column in both `refs` and `values` takes
+ *   the back-reference. Settings rows return no id and cannot be referenced.
  * - `assert` fails the whole batch unless the addressed rows hold `values`
  *   (compared as text, as ContentProviderOperation does) and, when given,
  *   their number is `expectCount`.
- * - `syncState` replaces this account's SyncState blob.
+ * - `syncState` replaces this account's SyncState blob. It must be the last
+ *   op of its batch and never a yield point (refused with `scope`).
  * - `yieldAllowed` marks the first op of an item group: the provider may
- *   commit everything before it and let other writers in. Batches must mark
- *   one at least every 400 ops (ContactsProvider refuses 500 without one).
+ *   commit everything before it and let other writers in. Contacts batches
+ *   must mark one at least every 400 ops (ContactsProvider refuses a batch
+ *   with 500 ops up to and including a yield point).
+ *
+ * What the real providers do with the cells (the fake provider copies it):
+ * - contacts `data1`..`data14` are TEXT columns, so a number written there
+ *   reads back as a string (`2` → `"2"`);
+ * - `Events.dirty` and `Calendars.dirty` are NULL, not 0, after an insert by
+ *   the sync adapter: write `dirty: 0` explicitly, and select dirty rows with
+ *   `dirty = 1`;
+ * - attendees, reminders and extended properties are read through a join,
+ *   where `_id` is ambiguous: address one of their rows with `id`, never
+ *   with `_id` in `where`. Extended properties are updated by `id` only.
+ * - an insert (or an update) naming a parent row, exception master or group
+ *   that no longer exists fails with `assert`, so the engine re-reads; one of
+ *   another account fails with `scope`.
  */
 export type ProviderOp =
   | { op: 'insert'; table: ProviderTable; values: WriteRow; refs?: Record<string, number>; yieldAllowed?: boolean }
@@ -305,7 +324,12 @@ export interface DeviceSyncNativeModule {
   getInfo(): Promise<{ accountType: string; sdkInt: number }>;
 
   listAccounts(): Promise<AndroidAccount[]>;
-  /** Adds the account if missing and (re)writes its registryId. Resolves true when it was created. */
+  /**
+   * Adds the account if missing. Resolves true when it was created, false
+   * when it exists for `registryId` already (one left without a registryId
+   * is adopted); rejects with code `conflict` when it belongs to another
+   * registry id, whose rows and SyncState it holds.
+   */
   ensureAccount(name: string, registryId: string): Promise<boolean>;
   /** Removes the account; the providers drop its rows. */
   removeAccount(name: string): Promise<boolean>;
@@ -328,7 +352,17 @@ export interface DeviceSyncNativeModule {
    * accounts with a contact or calendar type requests those syncs.
    */
   setPushRoutes(routesJson: string): Promise<void>;
+  /**
+   * Posts (or replaces) the account's one sync-problem notification; a tap
+   * opens `uri`, which must be a `bulwarkmobile://` link. `channelName` names
+   * the notification channel in the app's language; null keeps English.
+   */
+  showSyncProblem(accountName: string, title: string, text: string, uri: string, channelName: string | null): Promise<void>;
+  clearSyncProblem(accountName: string): Promise<void>;
 
+  // Provider I/O runs on one native thread, a call at a time. `query`,
+  // `readSyncState` and `readPhoto` reject with code `scope`, `permission` or
+  // `provider` (as `BatchFailure`).
   /** `ProviderQuery` JSON in, `ProviderRows` JSON out. */
   query(name: string, authority: Authority, queryJson: string): Promise<string>;
   /** `ProviderOp[]` JSON in, `BatchResult` JSON out (failures resolve, they do not reject). */

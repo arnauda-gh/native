@@ -62,7 +62,7 @@ describe('FakeDeviceProviders: contacts', () => {
       { op: 'insert', table: 'data', values: { [Data.RAW_CONTACT_ID]: theirs.rawId, [Data.MIMETYPE]: MimeType.NOTE } },
     ]);
     expect(orphan).toMatchObject({ ok: false, reason: 'scope' });
-    await expect(mine.port.query({ table: 'events', columns: ['_id'] })).rejects.toThrow(/scope/);
+    await expect(mine.port.query({ table: 'events', columns: ['_id'] })).rejects.toMatchObject({ code: 'scope' });
   });
 
   it('never sets DIRTY for the sync adapter but does for app edits, and only apps soft-delete', async () => {
@@ -162,7 +162,8 @@ describe('FakeDeviceProviders: contacts', () => {
     expect(photo?.jpegBase64).toBe('AAAA');
     expect(photo?.fileId).toEqual(expect.any(Number));
     const rows = await port.query({ table: 'data', columns: [Data.DATA14, Data.DATA15], where: `${Data.MIMETYPE} = ?`, args: [MimeType.PHOTO] });
-    expect(rows.rows[0]).toEqual([photo!.fileId, null]);
+    // data14 is a TEXT column: the file id reads back as text.
+    expect(rows.rows[0]).toEqual([String(photo!.fileId), null]);
   });
 
   it('models Fossify saves: rows re-inserted without DATA_SYNC', async () => {
@@ -268,13 +269,13 @@ describe('FakeDeviceProviders: calendar', () => {
     if (!res.ok) throw new Error(res.message);
     const masterId = res.results[0].id!;
     const ex = fake.user.exceptionViaUri(masterId, 86_400_000, { [Events.SELF_ATTENDEE_STATUS]: 1 });
-    expect(fake.row('events', masterId)![Events.DIRTY]).toBe(0);
+    expect(fake.row('events', masterId)![Events.DIRTY]).toBeNull();
     expect(fake.row('events', ex)).toMatchObject({ [Events.DIRTY]: 1, [Events._SYNC_ID]: null, [Events.UID_2445]: 'u1', [Events.ORIGINAL_SYNC_ID]: 'c/e1' });
     expect(fake.rows('attendees', 'event_id = ?', [ex])[0][Attendees.ATTENDEE_STATUS]).toBe(1);
     const split = fake.user.splitViaUri(masterId, 5 * 86_400_000, '20260101T000000Z', {});
     expect(fake.row('events', split)![Events._SYNC_ID]).toBe('c/e1');
     expect(fake.row('events', masterId)![Events.RRULE]).toContain('UNTIL=20260101T000000Z');
-    expect(fake.row('events', masterId)![Events.DIRTY]).toBe(0);
+    expect(fake.row('events', masterId)![Events.DIRTY]).toBeNull();
   });
 });
 
@@ -289,5 +290,181 @@ describe('AOSP format checks', () => {
     expect(aospRruleValid('RRULE:FREQ=DAILY')).toBe(false);
     expect(aospRruleValid('FREQ=YEARLY;RSCALE=GREGORIAN;SKIP=OMIT')).toBe(false);
     expect(aospRruleValid('COUNT=2')).toBe(false);
+  });
+});
+
+describe('FakeDeviceProviders: the native bridge rules', () => {
+  async function calendarWithEvent(fake: FakeDeviceProviders, account = ME) {
+    const port = fake.port(account, CALENDAR_AUTHORITY);
+    const res = await port.applyBatch([
+      {
+        op: 'insert',
+        table: 'calendars',
+        values: {
+          [Calendars.NAME]: 'Personal',
+          [Calendars.CALENDAR_DISPLAY_NAME]: 'Personal',
+          [Calendars.CALENDAR_COLOR]: -16776961,
+          [Calendars.CALENDAR_ACCESS_LEVEL]: 700,
+          [Calendars.OWNER_ACCOUNT]: account,
+        },
+      },
+      {
+        op: 'insert',
+        table: 'events',
+        values: { [Events.DTSTART]: 0, [Events.DTEND]: 3_600_000, [Events.EVENT_TIMEZONE]: 'UTC', [Events.STATUS]: 1 },
+        refs: { [Events.CALENDAR_ID]: 0 },
+      },
+      { op: 'insert', table: 'attendees', values: { [Attendees.ATTENDEE_EMAIL]: OTHER }, refs: { event_id: 1 } },
+      { op: 'insert', table: 'extended_properties', values: { name: 'x', value: '1' }, refs: { event_id: 1 } },
+    ]);
+    if (!res.ok) throw new Error(res.message);
+    return {
+      port,
+      calendarId: res.results[0].id!,
+      eventId: res.results[1].id!,
+      attendeeId: res.results[2].id!,
+      propertyId: res.results[3].id!,
+    };
+  }
+
+  it('stores numbers written to data1..data14 as text', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    const res = await port.applyBatch([
+      {
+        op: 'insert',
+        table: 'data',
+        values: { [Data.RAW_CONTACT_ID]: rawId, [Data.MIMETYPE]: MimeType.PHONE, [Data.DATA1]: '+1 555', [Data.DATA2]: 2 },
+      },
+    ]);
+    if (!res.ok) throw new Error(res.message);
+    const rows = await port.query({
+      table: 'data',
+      columns: [Data.DATA2, Data.RAW_CONTACT_ID],
+      where: `${Data.MIMETYPE} = ?`,
+      args: [MimeType.PHONE],
+    });
+    expect(rows.rows).toEqual([['2', rawId]]);
+    // Asserts compare as text, so a number still matches.
+    const ok = await port.applyBatch([{ op: 'assert', table: 'data', id: res.results[0].id!, values: { [Data.DATA2]: 2 } }]);
+    expect(ok.ok).toBe(true);
+  });
+
+  it('leaves DIRTY NULL on events and calendars the sync adapter inserts', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, calendarId, eventId } = await calendarWithEvent(fake);
+    expect(fake.row('calendars', calendarId)![Calendars.DIRTY]).toBeNull();
+    expect(fake.row('events', eventId)![Events.DIRTY]).toBeNull();
+    expect((await port.query({ table: 'events', columns: ['_id'], where: 'dirty = 0' })).rows).toEqual([]);
+    expect((await port.query({ table: 'events', columns: ['_id'], where: 'dirty = 1' })).rows).toEqual([]);
+  });
+
+  it('expects exactly the id row unless told otherwise, and applies where to it', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    const gone = await port.applyBatch([{ op: 'delete', table: 'raw_contacts', id: rawId + 1000 }]);
+    expect(gone).toMatchObject({ ok: false, reason: 'assert' });
+    const tolerated = await port.applyBatch([{ op: 'delete', table: 'raw_contacts', id: rawId + 1000, expectCount: 0 }]);
+    expect(tolerated).toEqual({ ok: true, results: [{ count: 0 }] });
+    const mismatch = await port.applyBatch([
+      { op: 'update', table: 'raw_contacts', id: rawId, where: `${RawContacts.DIRTY} = 1`, values: { [RawContacts.SYNC1]: 'x' } },
+    ]);
+    expect(mismatch).toMatchObject({ ok: false, reason: 'assert' });
+    const matched = await port.applyBatch([
+      { op: 'update', table: 'raw_contacts', id: rawId, where: `${RawContacts.DIRTY} = 0`, values: { [RawContacts.SYNC1]: 'x' } },
+    ]);
+    expect(matched).toEqual({ ok: true, results: [{ count: 1 }] });
+  });
+
+  it('refuses _id in where on calendar child tables, and updates extended properties by id only', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, eventId, attendeeId, propertyId } = await calendarWithEvent(fake);
+    await expect(
+      port.query({ table: 'attendees', columns: ['event_id'], where: '_id = ?', args: [attendeeId] }),
+    ).rejects.toMatchObject({ code: 'provider' });
+    const byWhere = await port.applyBatch([{ op: 'delete', table: 'attendees', where: '_id = ?', args: [attendeeId] }]);
+    expect(byWhere).toMatchObject({ ok: false, reason: 'provider' });
+    const byId = await port.applyBatch([{ op: 'delete', table: 'attendees', id: attendeeId }]);
+    expect(byId).toEqual({ ok: true, results: [{ count: 1 }] });
+    const propertiesByWhere = await port.applyBatch([
+      { op: 'update', table: 'extended_properties', where: 'event_id = ?', args: [eventId], values: { value: '2' } },
+    ]);
+    expect(propertiesByWhere).toMatchObject({ ok: false, reason: 'provider' });
+    const propertiesById = await port.applyBatch([
+      { op: 'update', table: 'extended_properties', id: propertyId, values: { value: '2' } },
+    ]);
+    expect(propertiesById.ok).toBe(true);
+  });
+
+  it('fails with assert for a parent that is gone and with scope for one of another account', async () => {
+    const fake = new FakeDeviceProviders();
+    const mine = await calendarWithEvent(fake);
+    const theirs = await calendarWithEvent(fake, OTHER);
+    const gone = await mine.port.applyBatch([
+      { op: 'insert', table: 'reminders', values: { event_id: theirs.eventId + 1000, minutes: 10 } },
+    ]);
+    expect(gone).toMatchObject({ ok: false, reason: 'assert' });
+    const foreign = await mine.port.applyBatch([
+      { op: 'insert', table: 'reminders', values: { event_id: theirs.eventId, minutes: 10 } },
+    ]);
+    expect(foreign).toMatchObject({ ok: false, reason: 'scope' });
+    const unnamed = await mine.port.applyBatch([{ op: 'insert', table: 'reminders', values: { minutes: 10 } }]);
+    expect(unnamed).toMatchObject({ ok: false, reason: 'scope' });
+    const moveAway = await mine.port.applyBatch([
+      { op: 'update', table: 'events', id: mine.eventId, values: { [Events.CALENDAR_ID]: theirs.calendarId } },
+    ]);
+    expect(moveAway).toMatchObject({ ok: false, reason: 'scope' });
+    const wrongRef = await mine.port.applyBatch([
+      { op: 'insert', table: 'colors', values: { color_type: 0, color_index: '1', color: 1 } },
+      { op: 'insert', table: 'reminders', values: { minutes: 10 }, refs: { event_id: 0 } },
+    ]);
+    expect(wrongRef).toMatchObject({ ok: false, reason: 'scope' });
+    const leaves = await mine.port.applyBatch([
+      { op: 'update', table: 'calendars', id: mine.calendarId, values: { [Calendars.ACCOUNT_NAME]: OTHER } },
+    ]);
+    expect(leaves).toMatchObject({ ok: false, reason: 'scope' });
+  });
+
+  it('wants syncState last and never at a yield point', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    const early = await port.applyBatch([
+      { op: 'syncState', value: '{}' },
+      { op: 'update', table: 'raw_contacts', id: rawId, values: { [RawContacts.SYNC1]: 'x' } },
+    ]);
+    expect(early).toMatchObject({ ok: false, reason: 'scope' });
+    const yielding = await port.applyBatch([
+      { op: 'update', table: 'raw_contacts', id: rawId, values: { [RawContacts.SYNC1]: 'x' } },
+      { op: 'syncState', value: '{}', yieldAllowed: true },
+    ]);
+    expect(yielding).toMatchObject({ ok: false, reason: 'scope' });
+    expect(fake.readSyncState(ME, CONTACTS_AUTHORITY)).toBeNull();
+  });
+
+  it('returns no id for a settings insert, which cannot be addressed by id either', async () => {
+    const fake = new FakeDeviceProviders();
+    const port = fake.port(ME, CONTACTS_AUTHORITY);
+    const res = await port.applyBatch([{ op: 'insert', table: 'settings', values: { ungrouped_visible: 1 } }]);
+    expect(res).toEqual({ ok: true, results: [{}] });
+    const byId = await port.applyBatch([{ op: 'delete', table: 'settings', id: 1 }]);
+    expect(byId).toMatchObject({ ok: false, reason: 'provider' });
+  });
+
+  it('counts the op at a yield point before resetting, like ContactsProvider', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    const update = (yieldAllowed = false): ProviderOp => ({
+      op: 'update',
+      table: 'raw_contacts',
+      id: rawId,
+      values: { [RawContacts.SYNC2]: 'y' },
+      yieldAllowed,
+    });
+    // 499 ops, then a yield point: fine.
+    const fits = [...Array.from({ length: 498 }, () => update()), update(true), ...Array.from({ length: 10 }, () => update())];
+    expect((await port.applyBatch(fits)).ok).toBe(true);
+    // The yield point is the 500th op since the start: refused.
+    const late = [...Array.from({ length: 499 }, () => update()), update(true)];
+    expect(await port.applyBatch(late)).toMatchObject({ ok: false, reason: 'provider' });
   });
 });

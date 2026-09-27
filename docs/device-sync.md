@@ -1018,39 +1018,76 @@ nested maps. Every provider call is scoped to one account of our type.
 | `openAccountSettings(name)` | the account's sync screen (`android.settings.ACCOUNT_SYNC_SETTINGS` with the Account), else `SYNC_SETTINGS` filtered to our type |
 | `finishRun(runId, reportJson)` / `isRunCancelled(runId)` | the run handshake |
 | `setPushRoutes(json)` | `{ jmapAccountId: [{ accountName, authorities }] }` for the push router, in SharedPreferences |
+| `showSyncProblem(name, title, text, uri, channelName)` / `clearSyncProblem(name)` | the account's one sync-problem notification; a tap opens `uri` (`bulwarkmobile://` only) in the app; `channelName` names the channel in the app's language |
 | `query(name, authority, queryJson)` | `ProviderQuery` → `ProviderRows` |
 | `applyBatch(name, authority, opsJson)` | `ProviderOp[]` → `BatchResult`; failures resolve as `{ok: false, reason}` |
 | `readSyncState(name, authority)` | the SyncState blob as text |
 | `readPhoto(name, rawContactId, maxPx)` | the display photo (or thumbnail), scaled, as JPEG base64 + file id |
 
+Provider calls run one at a time on a thread of the module's own (a batch
+can hold the provider for seconds at a contended yield point), through an
+unstable provider client, so a provider process that dies fails the call
+instead of this process. `query`, `readSyncState` and `readPhoto` reject with
+code `scope`, `permission` or `provider`.
+
 Events: `BulwarkDeviceSync:accountsChanged` (an account of our type was added
 or removed; JS re-lists). Events without a JS listener are dropped, so they are
 hints; the UI re-reads state on mount and on foreground.
 
-Scoping, enforced in Kotlin for every op:
+Scoping, enforced in Kotlin for every op
+(`android/app/src/main/java/com/anonymous/bulwarkmobile/sync/ProviderScope.kt`):
 
 - URIs always carry `caller_is_syncadapter=true`, `account_name`,
   `account_type` (CalendarProvider accepts no other query parameters).
 - Queries and updates/deletes by `where` get the account condition ANDed in:
-  `account_name/account_type` columns for raw_contacts, groups, settings,
-  calendars, events, colors; for data rows, `raw_contact_id IN` our raw
-  contacts; for attendees, reminders and extended properties, `event_id IN`
-  our events (resolved first; the providers may compile selections strictly,
-  so no subqueries). Ops by `id` verify the row belongs to the account first
-  and expect exactly one row.
+  - `account_name`/`account_type` columns for raw_contacts, groups,
+    settings, calendars and colors;
+  - data rows are filtered by ContactsProvider itself through the account
+    URI parameters (their account columns are never selected on: Android 17
+    drops them from the Data view for apps targeting API 37);
+  - events get `calendar_id IN` the account's calendars (CalendarProvider
+    updates events on the Events table, which has no account columns);
+  - attendees, reminders and extended properties get `event_id IN` the
+    account's events among those the op touches (resolved first; the
+    providers may compile selections strictly, so no subqueries).
+- Ops by `id` verify the row belongs to the account first (`scope`
+  otherwise) and expect exactly one row unless they set `expectCount`, so a
+  row that vanished fails with `assert`. `id` and `where` together address
+  the id row if it matches. On attendees, reminders and extended properties
+  the id column is table-qualified (`Attendees._id`), since CalendarProvider
+  reads attendees through a join where a bare `_id` is ambiguous; the engine
+  therefore never writes `_id` into a `where` there. Extended properties are
+  updated through their item URI, so by `id` only.
 - Inserts into data/attendees/reminders/extended_properties/events must name a
-  parent of the account (a back-reference to an insert of the same batch, or
-  an id that is verified).
+  parent (a back-reference to an insert of the same batch, or an id); an
+  insert or update naming a parent, exception master (`original_id`) or group
+  (`data1` of a membership row) checks it: gone fails with `assert` (re-read
+  and re-plan), another account's with `scope`. A back-reference must point
+  to an earlier insert of the right table; settings inserts return no id.
+- `account_name`/`account_type`/`data_set` may only be written to restate the
+  account, on the tables that have them (`scope` otherwise).
 - Tables are an enumerated set per authority; anything else is refused
   (`scope`).
 - Blobs (`{ b64 }`) are only accepted for `data.data15` (photos).
 - A `syncState` op must be the last op of its batch and not `yieldAllowed`,
   so a provider yield never commits the state ahead of the rows (refused as
   `scope` otherwise).
-- Batches: at most 499 ops between yield points (ContactsProvider throws at
-  500), about 300 KB per call; `TransactionTooLargeException` resolves as
+- Batches: at most 499 ops up to and including each yield point
+  (ContactsProvider counts an op before resetting at a yield point and throws
+  at 500), about 300 KB per call; `TransactionTooLargeException` resolves as
   `tooLarge` so JS splits the batch. `OperationApplicationException` resolves
-  as `assert`, `SecurityException` as `permission`.
+  as `assert` (except the provider's own "too many operations" and failed
+  inserts, `provider`), `SecurityException` as `permission`. The whole batch
+  is also refused (`scope`) once the Android account is gone, so no rows
+  outlive it.
+
+What the providers do with values, which the planners account for:
+
+- contacts `data1`..`data14` are TEXT columns: a number written there reads
+  back as a string, so mappers normalise types before comparing;
+- `Events.dirty` and `Calendars.dirty` are NULL after a sync-adapter insert:
+  planners write `dirty = 0` on every insert and select dirty rows with
+  `dirty = 1`.
 
 ## App integration
 

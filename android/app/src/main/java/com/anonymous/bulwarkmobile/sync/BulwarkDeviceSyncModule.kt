@@ -19,17 +19,30 @@ import com.facebook.react.bridge.ReactMethod
 import com.facebook.react.bridge.WritableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule.RCTDeviceEventEmitter
 import org.json.JSONObject
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
- * `NativeModules.BulwarkDeviceSync`: Android accounts, sync settings and the
- * run handshake of device sync (#34). The contract is `DeviceSyncNativeModule`
- * in src/device-sync/types.ts; docs/device-sync.md explains it.
+ * `NativeModules.BulwarkDeviceSync`: Android accounts, sync settings, the run
+ * handshake, provider I/O, push routes and the sync-problem notification of
+ * device sync (#34). The contract is `DeviceSyncNativeModule` in
+ * src/device-sync/types.ts; docs/device-sync.md explains it.
  */
 class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     private val accountsListener = OnAccountsUpdateListener {
         emit(ACCOUNTS_CHANGED_EVENT, null)
+    }
+
+    /**
+     * Provider I/O runs here, one call at a time: a batch can hold the
+     * provider for seconds (it sleeps at a contended yield point), which would
+     * stall every other native module call on React's native-modules thread.
+     */
+    private val io: ExecutorService = Executors.newSingleThreadExecutor { task ->
+        Thread(task, "BulwarkDeviceSync-io").apply { isDaemon = true }
     }
 
     init {
@@ -59,6 +72,7 @@ class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
         } catch (e: RuntimeException) {
             // Not registered.
         }
+        io.shutdown()
         super.invalidate()
     }
 
@@ -181,6 +195,91 @@ class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
         promise.resolve(DeviceSyncRuns.isCancelled(runId))
     }
 
+    // ── provider I/O ────────────────────────────────────────────
+
+    /** `ProviderQuery` JSON in, `ProviderRows` JSON out; rejects with `scope`, `permission` or `provider`. */
+    @ReactMethod
+    fun query(name: String, authority: String, queryJson: String, promise: Promise) = onIo(promise) {
+        ProviderIo(reactApplicationContext, name, authority).use { it.query(queryJson) }
+    }
+
+    /** `ProviderOp[]` JSON in, `BatchResult` JSON out. Never rejects: a failed batch is a result. */
+    @ReactMethod
+    fun applyBatch(name: String, authority: String, opsJson: String, promise: Promise) {
+        val failed = { e: Throwable -> ProviderResults.failed(ProviderIo.failureOf(e), e.message ?: e.javaClass.simpleName) }
+        try {
+            io.execute {
+                val result = try {
+                    ProviderIo(reactApplicationContext, name, authority).use { it.applyBatch(opsJson) }
+                } catch (e: Throwable) {
+                    failed(e)
+                }
+                promise.resolve(result)
+            }
+        } catch (e: RejectedExecutionException) {
+            promise.resolve(failed(e))
+        }
+    }
+
+    @ReactMethod
+    fun readSyncState(name: String, authority: String, promise: Promise) = onIo(promise) {
+        ProviderIo(reactApplicationContext, name, authority).use { it.readSyncState() }
+    }
+
+    /** `PhotoData` JSON, or null when the raw contact has no photo; rejects with `scope` for another account's. */
+    @ReactMethod
+    fun readPhoto(name: String, rawContactId: Double, maxPx: Double, promise: Promise) = onIo(promise) {
+        ProviderIo(reactApplicationContext, name, DeviceSyncAccounts.CONTACTS_AUTHORITY)
+            .use { it.readPhoto(rawContactId.toLong(), maxPx.toInt()) }
+    }
+
+    /** Settles [promise] with [block]'s result on the I/O thread; rejects with a `BatchFailure` code. */
+    private fun onIo(promise: Promise, block: () -> Any?) {
+        try {
+            io.execute {
+                try {
+                    promise.resolve(block())
+                } catch (e: Throwable) {
+                    promise.reject(ProviderIo.failureOf(e).wire, e.message ?: e.javaClass.simpleName, e)
+                }
+            }
+        } catch (e: RejectedExecutionException) {
+            promise.reject("provider", "Device sync is shutting down", e)
+        }
+    }
+
+    // ── push routes and notifications ───────────────────────────
+
+    /** `{ jmapAccountId: [{ accountName, authorities }] }` for the push router (DeviceSyncPushRouter). */
+    @ReactMethod
+    fun setPushRoutes(routesJson: String, promise: Promise) = settle(promise) {
+        DeviceSyncPushRouter.saveRoutes(reactApplicationContext, routesJson)
+        null
+    }
+
+    /**
+     * Posts (or replaces) the account's sync-problem notification. [channelName]
+     * names the notification channel in the app's language; null keeps English.
+     */
+    @ReactMethod
+    fun showSyncProblem(
+        accountName: String,
+        title: String,
+        text: String,
+        uri: String,
+        channelName: String?,
+        promise: Promise,
+    ) = settle(promise) {
+        SyncProblemNotifier.show(reactApplicationContext, accountName, title, text, uri, channelName)
+        null
+    }
+
+    @ReactMethod
+    fun clearSyncProblem(accountName: String, promise: Promise) = settle(promise) {
+        SyncProblemNotifier.clear(reactApplicationContext, accountName)
+        null
+    }
+
     // NativeEventEmitter bookkeeping.
     @ReactMethod
     fun addListener(eventName: String) {}
@@ -191,6 +290,8 @@ class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
     private inline fun settle(promise: Promise, block: () -> Any?) {
         try {
             promise.resolve(block())
+        } catch (e: AccountConflictException) {
+            promise.reject("conflict", e.message, e)
         } catch (e: SecurityException) {
             promise.reject("permission", e.message, e)
         } catch (e: IllegalArgumentException) {

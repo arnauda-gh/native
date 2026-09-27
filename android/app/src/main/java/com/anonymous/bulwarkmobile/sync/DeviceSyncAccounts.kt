@@ -36,18 +36,32 @@ object DeviceSyncAccounts {
         return manager.getAccountsByType(accountType(context)).map { it to manager.getUserData(it, USER_DATA_REGISTRY_ID) }
     }
 
+    fun exists(context: Context, name: String): Boolean =
+        AccountManager.get(context).getAccountsByType(accountType(context)).any { it.name == name }
+
     /**
-     * Adds the account when it is missing and (re)writes its registry id.
-     * Both authorities start syncable with automatic sync off; the app turns
-     * on the ones the user picked. Returns true when the account was created.
+     * Adds the account when it is missing. Both authorities start syncable
+     * with automatic sync off; the app turns on the ones the user picked.
+     * Returns true when the account was created, false when it exists for
+     * [registryId] already. An account that belongs to another registry id
+     * keeps it ([AccountConflictException]): its rows and SyncState were
+     * written for that app account.
      */
     fun ensure(context: Context, name: String, registryId: String): Boolean {
         val manager = AccountManager.get(context)
         val account = account(context, name)
         val exists = manager.getAccountsByType(account.type).any { it.name == name }
-        if (exists) {
-            manager.setUserData(account, USER_DATA_REGISTRY_ID, registryId)
-            return false
+        val current = if (exists) manager.getUserData(account, USER_DATA_REGISTRY_ID) else null
+        when (ensureAction(exists, current, registryId)) {
+            EnsureAction.KEEP -> return false
+            EnsureAction.ADOPT -> {
+                manager.setUserData(account, USER_DATA_REGISTRY_ID, registryId)
+                return false
+            }
+            EnsureAction.CONFLICT -> throw AccountConflictException(
+                "The Android account $name belongs to another app account ($current)",
+            )
+            EnsureAction.CREATE -> Unit
         }
         val userData = Bundle().apply { putString(USER_DATA_REGISTRY_ID, registryId) }
         check(manager.addAccountExplicitly(account, null, userData)) { "Android refused to add the account" }
@@ -56,6 +70,16 @@ object DeviceSyncAccounts {
             ContentResolver.setSyncAutomatically(account, authority, false)
         }
         return true
+    }
+
+    enum class EnsureAction { CREATE, KEEP, ADOPT, CONFLICT }
+
+    /** An existing account without a registry id (never completed) is adopted; one with another id is not touched. */
+    fun ensureAction(exists: Boolean, currentRegistryId: String?, registryId: String): EnsureAction = when {
+        !exists -> EnsureAction.CREATE
+        currentRegistryId == registryId -> EnsureAction.KEEP
+        currentRegistryId.isNullOrEmpty() -> EnsureAction.ADOPT
+        else -> EnsureAction.CONFLICT
     }
 
     /** Removes the account; the Contacts and Calendar providers drop all of its rows. */
@@ -83,8 +107,14 @@ object DeviceSyncAccounts {
         if (seconds > 0) ContentResolver.addPeriodicSync(account, authority, Bundle.EMPTY, seconds)
     }
 
+    /**
+     * Requests a sync. SyncManager drops a request that matches a sync it is
+     * running, so a run of that account and authority is also flagged to
+     * ask for another sync when it ends (see [DeviceSyncRuns.flagSyncAgain]).
+     */
     fun requestSync(context: Context, name: String, authority: String, flags: SyncRequestFlags) {
         requireAuthority(authority)
+        DeviceSyncRuns.flagSyncAgain(name, authority)
         ContentResolver.requestSync(account(context, name), authority, flags.toExtras())
     }
 
@@ -92,6 +122,9 @@ object DeviceSyncAccounts {
         require(authority in AUTHORITIES) { "Unknown authority $authority" }
     }
 }
+
+/** [DeviceSyncAccounts.ensure] refused to hand an account of one app account to another. */
+class AccountConflictException(message: String) : Exception(message)
 
 /** The SYNC_EXTRAS_* flags a request carries. Constant extras let repeated requests coalesce. */
 data class SyncRequestFlags(

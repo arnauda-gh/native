@@ -7,7 +7,10 @@
  * "Device data model", and the AOSP facts quoted there):
  *
  * - Sync-adapter writes never set DIRTY; app writes do (data rows, events and
- *   their attendees/reminders). The provider never clears DIRTY.
+ *   their attendees/reminders). The provider never clears DIRTY. Events and
+ *   calendars the sync adapter inserts have DIRTY NULL unless it writes one.
+ * - Contacts `data1`..`data14` are TEXT columns: numbers are stored, and read
+ *   back, as their text.
  * - RawContacts.VERSION goes up on every data-row insert, update or delete,
  *   whoever makes it, and on a DELETED change; never for DIRTY, SOURCE_ID or
  *   SYNC1-4. Groups bump VERSION on every update.
@@ -23,6 +26,15 @@
  *   `P<n>D`, while `PT0S`-style all-day durations, NULL STATUS updates,
  *   SELF_ATTENDEE_STATUS updates and RRULEs with unknown parts fail the batch.
  * - Scoping: rows of other accounts are invisible and untouchable.
+ * - The native bridge's rules (android/.../sync/ProviderOps.kt and
+ *   ProviderScope.kt): an op with `id` expects exactly one row unless it says
+ *   otherwise, and applies `where` too; attendees, reminders and extended
+ *   properties refuse `_id` in `where` (ambiguous in CalendarProvider's
+ *   join), and extended properties are updated by `id` only; a named parent,
+ *   exception master or group that is gone fails with `assert`, one of
+ *   another account with `scope`; `syncState` must be the batch's last op
+ *   and no yield point; settings inserts return no id. Query and photo
+ *   errors carry the native rejection `code`.
  *
  * Pure TypeScript, for vitest only.
  */
@@ -106,7 +118,92 @@ class FakeProviderError extends Error {
   }
 }
 
+/** A rejected query or photo read, with the `code` the native module rejects with. */
+function rejection(code: BatchFailure, message: string): Error {
+  return Object.assign(new Error(message), { code });
+}
+
 const isEmpty = (v: Cell | undefined) => v === null || v === undefined || v === '';
+
+/** The parent row each row of a table belongs to. */
+const PARENTS: Partial<Record<ProviderTable, { column: string; table: ProviderTable }>> = {
+  data: { column: Data.RAW_CONTACT_ID, table: 'raw_contacts' },
+  events: { column: Events.CALENDAR_ID, table: 'calendars' },
+  attendees: { column: Attendees.EVENT_ID, table: 'events' },
+  reminders: { column: Reminders.EVENT_ID, table: 'events' },
+  extended_properties: { column: ExtendedProperties.EVENT_ID, table: 'events' },
+};
+
+/** Tables read through CalendarProvider's join, where a bare `_id` is ambiguous. */
+const JOINED_CHILD_TABLES: ReadonlySet<ProviderTable> = new Set(['attendees', 'reminders', 'extended_properties']);
+
+/** Tables that carry the account in `account_name`/`account_type`. */
+const ACCOUNT_TABLES: ReadonlySet<ProviderTable> = new Set(['raw_contacts', 'groups', 'settings', 'calendars', 'colors']);
+
+/**
+ * The table a written column points into when the row it names must be the
+ * account's too (ProviderOps.kt `referencedTable`): a parent, an exception's
+ * master, a membership's group.
+ */
+function referencedTable(table: ProviderTable, column: string, values: WriteRow): ProviderTable | null {
+  if (PARENTS[table]?.column === column) return PARENTS[table].table;
+  if (table === 'events' && column === Events.ORIGINAL_ID) return 'events';
+  if (table === 'data' && column === Data.DATA1 && values[Data.MIMETYPE] === MimeType.GROUP_MEMBERSHIP) return 'groups';
+  return null;
+}
+
+const TEXT_DATA_COLUMNS: ReadonlySet<string> = new Set(numbered('data', 1, 14));
+
+/** ContactsProvider's `data1`..`data14` have TEXT affinity: SQLite stores numbers as their text. */
+function textifyData(row: StoredRow): void {
+  for (const column of TEXT_DATA_COLUMNS) {
+    const v = row[column];
+    if (typeof v === 'number') row[column] = String(v);
+  }
+}
+
+/**
+ * What the native side refuses before touching the provider (ProviderOps.kt
+ * `parseBatch`): a misplaced syncState, bad back-references, inserts that
+ * name no parent, and contacts batches without enough yield points.
+ */
+function refuseBatch(authority: Authority, ops: ProviderOp[]): { reason: BatchFailure; message: string } | null {
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    if (op.op !== 'syncState') continue;
+    if (i !== ops.length - 1) return { reason: 'scope', message: `op ${i}: syncState must be the last op of its batch` };
+    if (op.yieldAllowed) return { reason: 'scope', message: `op ${i}: syncState must not be a yield point` };
+  }
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    if (op.op !== 'insert') continue;
+    for (const [column, ref] of Object.entries(op.refs ?? {})) {
+      const target = ops[ref];
+      if (!Number.isInteger(ref) || ref < 0 || ref >= i || target?.op !== 'insert' || target.table === 'settings') {
+        return { reason: 'provider', message: `op ${i}: ${column} refers to op ${ref}, which is not an earlier insert with a row id` };
+      }
+      const expected = referencedTable(op.table, column, op.values);
+      if (expected && target.table !== expected) {
+        return { reason: 'scope', message: `op ${i}: ${column} must refer to a ${expected} insert, not ${target.table}` };
+      }
+    }
+    const parent = PARENTS[op.table];
+    if (parent && !(parent.column in (op.refs ?? {})) && (op.values[parent.column] ?? null) === null) {
+      return { reason: 'scope', message: `op ${i}: a ${op.table} insert must name its ${parent.column}` };
+    }
+  }
+  if (authority === CONTACTS_AUTHORITY) {
+    // ContactsProvider counts an op before resetting at a yield point.
+    let sinceYield = 0;
+    for (let i = 0; i < ops.length; i++) {
+      if (++sinceYield >= 500) {
+        return { reason: 'provider', message: 'Too many content provider operations between yield points' };
+      }
+      if (i > 0 && ops[i].yieldAllowed) sinceYield = 0;
+    }
+  }
+  return null;
+}
 
 /** AOSP calendarcommon2 Duration.parse: `[+-]P` then `<digits><W|D|H|M|S>`, `T` ignored. */
 export function aospDurationValid(value: string): boolean {
@@ -408,15 +505,10 @@ export class FakeDeviceProviders {
       record(false);
       return { ok: false, reason: 'tooLarge', message: 'TransactionTooLargeException' };
     }
-    if (authority === CONTACTS_AUTHORITY) {
-      let sinceYield = 0;
-      for (let i = 0; i < ops.length; i++) {
-        if (i > 0 && ops[i].yieldAllowed) sinceYield = 0;
-        if (++sinceYield >= 500) {
-          record(false);
-          return { ok: false, reason: 'provider', message: 'Too many content provider operations between yield points' };
-        }
-      }
+    const refusal = refuseBatch(authority, ops);
+    if (refusal) {
+      record(false);
+      return { ok: false, ...refusal };
     }
     for (const hook of this.beforeBatch.splice(0)) hook();
 
@@ -469,6 +561,13 @@ function checkColumns(table: ProviderTable, columns: Iterable<string>, write: bo
   }
 }
 
+/** SQLite on CalendarProvider's attendee join: "ambiguous column name: _id". Address those rows with `id`. */
+function checkNoBareId(table: ProviderTable, where: string | undefined): void {
+  if (JOINED_CHILD_TABLES.has(table) && whereColumns(where).includes('_id')) {
+    throw new FakeProviderError('provider', `ambiguous column name: _id (address ${table} rows with id)`);
+  }
+}
+
 class FakePort implements ProviderPort {
   constructor(
     private readonly fake: FakeDeviceProviders,
@@ -478,12 +577,13 @@ class FakePort implements ProviderPort {
 
   async query(q: ProviderQuery): Promise<ProviderRows> {
     if (!tablesFor(this.authority).includes(q.table)) {
-      throw new Error(`scope: table ${q.table} is not part of ${this.authority}`);
+      throw rejection('scope', `table ${q.table} is not part of ${this.authority}`);
     }
     try {
       checkColumns(q.table, [...q.columns, ...whereColumns(q.where)], false);
+      checkNoBareId(q.table, q.where);
     } catch (e) {
-      throw new Error((e as Error).message);
+      throw rejection('provider', (e as Error).message);
     }
     const pred = compileWhere(q.where, q.args);
     const order = compileOrderBy(q.orderBy);
@@ -507,7 +607,9 @@ class FakePort implements ProviderPort {
 
   async readPhoto(rawContactId: number, _maxPx: number): Promise<PhotoData | null> {
     const rc = this.fake.table('raw_contacts').get(rawContactId);
-    if (!rc || !this.fake.owned('raw_contacts', rc, this.accountName)) throw new Error('scope: raw contact of another account');
+    if (!rc || !this.fake.owned('raw_contacts', rc, this.accountName)) {
+      throw rejection('scope', `Raw contact ${rawContactId} is not part of the account`);
+    }
     for (const row of this.fake.table('data').values()) {
       if (row[Data.RAW_CONTACT_ID] === rawContactId && row[Data.MIMETYPE] === MimeType.PHOTO) {
         const fileId = row[Data.DATA14] === null ? null : Number(row[Data.DATA14]);
@@ -545,20 +647,68 @@ class BatchApplier {
     if (!tablesFor(this.authority).includes(table)) this.scopeError(`table ${table} is not part of ${this.authority}`);
   }
 
+  /** The rows an op addresses: the `id` row if it also matches `where`, or every row of the account matching `where`. */
   private target(table: ProviderTable, id: number | undefined, where: string | undefined, args: Array<string | number> | undefined): number[] {
+    if (id !== undefined && table === 'settings') throw new FakeProviderError('provider', 'settings rows have no id');
+    checkColumns(table, whereColumns(where), false);
+    checkNoBareId(table, where);
+    const pred = compileWhere(where, args);
     const rows = this.fake.table(table);
     if (id !== undefined) {
       const row = rows.get(id);
       if (!row) return [];
       if (!this.fake.owned(table, row, this.account)) this.scopeError(`${table} ${id} belongs to another account`);
-      return [id];
+      return pred((c) => this.fake.readCell(table, row, c)) ? [id] : [];
     }
-    checkColumns(table, whereColumns(where), false);
-    const pred = compileWhere(where, args);
     return [...rows]
       .filter(([, row]) => this.fake.owned(table, row, this.account))
       .filter(([, row]) => pred((c) => this.fake.readCell(table, row, c)))
       .map(([rowId]) => rowId);
+  }
+
+  /** An op that names one row by id expects exactly that row unless it says otherwise. */
+  private checkCount(ids: number[], id: number | undefined, expectCount: number | undefined): void {
+    const expected = expectCount ?? (id !== undefined ? 1 : undefined);
+    if (expected !== undefined && ids.length !== expected) {
+      throw new FakeProviderError('assert', `wrong number of rows: ${ids.length}, expected ${expected}`);
+    }
+  }
+
+  /** Account columns may only restate the account, and only on the tables that have them. */
+  private checkAccountColumns(table: ProviderTable, values: WriteRow): void {
+    for (const column of ['account_name', 'account_type', 'data_set']) {
+      if (!(column in values)) continue;
+      const cell = values[column];
+      const restates =
+        ACCOUNT_TABLES.has(table) &&
+        (column === 'account_name' ? cell === this.account : column === 'account_type' ? cell === this.fake.accountType : cell === null);
+      if (!restates) this.scopeError(`${table}.${column} would leave the account`);
+    }
+  }
+
+  /**
+   * Parents, masters and groups a written column names must be rows of the
+   * account that still exist: a gone one fails with `assert` (the engine
+   * re-reads), one of another account with `scope`. `skip`: columns filled by
+   * back-references, checked before the batch ran.
+   */
+  private checkReferences(table: ProviderTable, values: WriteRow, skip: ReadonlySet<string> = new Set()): void {
+    for (const [column, cell] of Object.entries(values)) {
+      if (skip.has(column)) continue;
+      const referenced = referencedTable(table, column, values);
+      if (!referenced) continue;
+      if (cell === null) {
+        if (PARENTS[table]?.column === column) this.scopeError(`${table}.${column} must name a ${referenced} row`);
+        continue;
+      }
+      const id = typeof cell === 'number' ? cell : typeof cell === 'string' && /^\d+$/.test(cell) ? Number(cell) : NaN;
+      if (!Number.isInteger(id)) throw new FakeProviderError('provider', `${table}.${column} must be a row id`);
+      const row = this.fake.table(referenced).get(id);
+      if (!row) throw new FakeProviderError('assert', `${table}.${column} names ${referenced} ${id}, which no longer exists`);
+      if (!this.fake.owned(referenced, row, this.account)) {
+        this.scopeError(`${table}.${column} names ${referenced} ${id} of another account`);
+      }
+    }
   }
 
   private values(table: ProviderTable, values: WriteRow): StoredRow {
@@ -603,30 +753,21 @@ class BatchApplier {
   }
 
   private insert(table: ProviderTable, values: WriteRow, refs: Record<string, number> | undefined, index: number): OpResult {
+    this.checkAccountColumns(table, values);
+    this.checkReferences(table, values, new Set(Object.keys(refs ?? {})));
     const row = this.values(table, values);
+    // Back-references win over values, as ContentProviderOperation applies them last.
     for (const [column, ref] of Object.entries(refs ?? {})) {
       if (ref >= index || this.results[ref]?.id === undefined) throw new FakeProviderError('provider', `bad back-reference ${ref}`);
       row[column] = this.results[ref].id!;
     }
     const id = this.fake.allocId();
     const account = { account_name: this.account, account_type: this.fake.accountType };
-    const parentOwned = (parentTable: ProviderTable, parentId: Cell) => {
-      const parent = this.fake.table(parentTable).get(Number(parentId));
-      if (!parent || !this.fake.owned(parentTable, parent, this.account)) {
-        this.scopeError(`${table} insert names ${parentTable} ${String(parentId)} outside the account`);
-      }
-      return parent;
-    };
-    const accountMismatch = (r: StoredRow) =>
-      (r.account_name !== undefined && r.account_name !== this.account) ||
-      (r.account_type !== undefined && r.account_type !== this.fake.accountType);
     switch (table) {
       case 'raw_contacts':
-        if (accountMismatch(row)) this.scopeError('raw contact of another account');
         Object.assign(row, { ...defaults(RAW_CONTACT_DEFAULTS), ...row, ...account });
         break;
       case 'groups':
-        if (accountMismatch(row)) this.scopeError('group of another account');
         Object.assign(row, { ...defaults(GROUP_DEFAULTS), ...row, ...account });
         break;
       case 'settings': {
@@ -634,21 +775,22 @@ class BatchApplier {
           if (s.account_name === this.account && s.account_type === this.fake.accountType) this.fake.table('settings').delete(sid);
         }
         Object.assign(row, { [ContactsSettings.UNGROUPED_VISIBLE]: 0, [ContactsSettings.SHOULD_SYNC]: 1, ...row, ...account });
-        break;
+        this.fake.table(table).set(id, row);
+        // Keyed by the account: the insert answers without a row id.
+        return {};
       }
       case 'data': {
-        parentOwned('raw_contacts', row[Data.RAW_CONTACT_ID]);
         row[Data.RAW_CONTACT_ID] = Number(row[Data.RAW_CONTACT_ID]);
         if (isEmpty(row[Data.MIMETYPE])) throw new FakeProviderError('provider', 'data row without mimetype');
         row[Data.DATA_VERSION] = 0;
         if (row[Data.MIMETYPE] === MimeType.GROUP_MEMBERSHIP) this.resolveMembership(row);
         this.processPhoto(row);
         this.fake.normalizeData(row);
+        textifyData(row);
         this.insertedDataFor.add(Number(row[Data.RAW_CONTACT_ID]));
         break;
       }
       case 'calendars': {
-        if (accountMismatch(row)) this.scopeError('calendar of another account');
         for (const c of [Calendars.NAME, Calendars.CALENDAR_DISPLAY_NAME, Calendars.CALENDAR_COLOR, Calendars.CALENDAR_ACCESS_LEVEL, Calendars.OWNER_ACCOUNT]) {
           if (isEmpty(row[c])) throw new FakeProviderError('provider', `calendar insert without ${c}`);
         }
@@ -656,8 +798,9 @@ class BatchApplier {
         break;
       }
       case 'events': {
-        const calendar = parentOwned('calendars', row[Events.CALENDAR_ID])!;
-        row[Events.CALENDAR_ID] = Number(row[Events.CALENDAR_ID]);
+        const calendarId = Number(row[Events.CALENDAR_ID]);
+        row[Events.CALENDAR_ID] = calendarId;
+        const calendar = this.fake.table('calendars').get(calendarId)!;
         Object.assign(row, { ...defaults(EVENT_DEFAULTS), ...row });
         this.fake.fixEvent(row, true);
         if (isEmpty(row[Events.ORGANIZER])) row[Events.ORGANIZER] = calendar[Calendars.OWNER_ACCOUNT];
@@ -676,11 +819,9 @@ class BatchApplier {
       case 'attendees':
       case 'reminders':
       case 'extended_properties':
-        parentOwned('events', row.event_id);
         row.event_id = Number(row.event_id);
         break;
       case 'colors':
-        if (accountMismatch(row)) this.scopeError('color of another account');
         Object.assign(row, { ...row, ...account });
         break;
     }
@@ -733,10 +874,14 @@ class BatchApplier {
     values: WriteRow,
     expectCount: number | undefined,
   ): OpResult {
-    const ids = this.target(table, id, where, args);
-    if (expectCount !== undefined && ids.length !== expectCount) {
-      throw new FakeProviderError('assert', `wrong number of rows: ${ids.length}`);
+    this.checkAccountColumns(table, values);
+    this.checkReferences(table, values);
+    if (table === 'extended_properties' && (id === undefined || where !== undefined)) {
+      // CalendarProvider updates them only through the item URI, which takes no selection.
+      throw new FakeProviderError('provider', 'extended properties can only be updated by id');
     }
+    const ids = this.target(table, id, where, args);
+    this.checkCount(ids, id, expectCount);
     const patch = this.values(table, values);
     for (const rowId of ids) {
       const row = this.fake.table(table).get(rowId)!;
@@ -757,6 +902,7 @@ class BatchApplier {
           row[Data.DATA_VERSION] = Number(row[Data.DATA_VERSION] ?? 0) + 1;
           this.processPhoto(row);
           this.fake.normalizeData(row);
+          textifyData(row);
           this.fake.bumpVersion(Number(row[Data.RAW_CONTACT_ID]));
           break;
         case 'events':
@@ -781,9 +927,7 @@ class BatchApplier {
     expectCount: number | undefined,
   ): OpResult {
     const ids = this.target(table, id, where, args);
-    if (expectCount !== undefined && ids.length !== expectCount) {
-      throw new FakeProviderError('assert', `wrong number of rows: ${ids.length}`);
-    }
+    this.checkCount(ids, id, expectCount);
     for (const rowId of ids) {
       const row = this.fake.table(table).get(rowId);
       if (!row) continue;
@@ -802,9 +946,7 @@ class BatchApplier {
     expectCount: number | undefined,
   ): OpResult {
     const ids = this.target(table, id, where, args);
-    if (expectCount !== undefined && ids.length !== expectCount) {
-      throw new FakeProviderError('assert', `wrong number of rows: ${ids.length}`);
-    }
+    this.checkCount(ids, id, expectCount);
     if (values) {
       checkColumns(table, Object.keys(values), false);
       for (const rowId of ids) {
@@ -859,11 +1001,12 @@ const CALENDAR_DEFAULTS: StoredRow = {
   [Calendars.MAX_REMINDERS]: 5,
   [Calendars.CAN_ORGANIZER_RESPOND]: 1,
   [Calendars.CAN_MODIFY_TIME_ZONE]: 1,
-  [Calendars.DIRTY]: 0,
+  // No column default: NULL until someone writes it.
+  [Calendars.DIRTY]: null,
 };
 
 const EVENT_DEFAULTS: StoredRow = {
-  [Events.DIRTY]: 0,
+  [Events.DIRTY]: null,
   [Events.DELETED]: 0,
   [Events.AVAILABILITY]: 0,
   [Events.ACCESS_LEVEL]: 0,
@@ -909,6 +1052,7 @@ export class FakeUser {
     const id = this.fake.allocId();
     const row: StoredRow = { ...values, [Data.RAW_CONTACT_ID]: rawContactId, [Data.DATA_VERSION]: 0 };
     this.fake.normalizeData(row);
+    textifyData(row);
     this.fake.table('data').set(id, row);
     this.fake.bumpVersion(rawContactId);
     this.dirtyContact(rawContactId);
@@ -922,6 +1066,7 @@ export class FakeUser {
     Object.assign(row, values);
     row[Data.DATA_VERSION] = Number(row[Data.DATA_VERSION] ?? 0) + 1;
     this.fake.normalizeData(row);
+    textifyData(row);
     const rcId = Number(row[Data.RAW_CONTACT_ID]);
     this.fake.bumpVersion(rcId);
     this.dirtyContact(rcId);

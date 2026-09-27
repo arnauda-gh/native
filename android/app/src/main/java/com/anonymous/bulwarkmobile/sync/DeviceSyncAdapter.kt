@@ -40,6 +40,13 @@ class DeviceSyncAdapter(context: Context) :
 
     private val main = Handler(Looper.getMainLooper())
 
+    /**
+     * Anything thrown out of here is rethrown on the sync thread
+     * (AbstractThreadedSyncAdapter's SyncThread) and kills the process, the UI
+     * included. So every failure becomes a result: a soft error SyncManager
+     * retries with back-off, or a database error for a missing permission,
+     * as the framework would report it.
+     */
     override fun onPerformSync(
         account: Account,
         extras: Bundle,
@@ -47,6 +54,18 @@ class DeviceSyncAdapter(context: Context) :
         provider: ContentProviderClient,
         syncResult: SyncResult,
     ) {
+        try {
+            performSync(account, extras, authority, syncResult)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Sync of $authority refused by a permission check", e)
+            syncResult.databaseError = true
+        } catch (t: Throwable) {
+            Log.e(TAG, "Sync of $authority failed", t)
+            syncResult.stats.numIoExceptions++
+        }
+    }
+
+    private fun performSync(account: Account, extras: Bundle, authority: String, syncResult: SyncResult) {
         val registryId = AccountManager.get(context).getUserData(account, DeviceSyncAccounts.USER_DATA_REGISTRY_ID)
         if (registryId.isNullOrEmpty()) {
             Log.w(TAG, "Sync of $authority skipped: the account has no app account")
@@ -69,9 +88,9 @@ class DeviceSyncAdapter(context: Context) :
                     run.end("no report before the deadline")
                 }
             }
-            val outcome = SyncReports.outcome(run.report.get(), run.endReason.get())
+            val outcome = SyncReports.outcome(run.report, run.endReason)
             SyncReports.apply(outcome, syncResult)
-            Log.i(TAG, "Sync ${run.runId} of $authority ended (${run.endReason.get()}) after " +
+            Log.i(TAG, "Sync ${run.runId} of $authority ended (${run.endReason}) after " +
                 "${SystemClock.elapsedRealtime() - startedAt} ms: $outcome")
         } catch (e: InterruptedException) {
             // onSyncCanceled interrupts this thread. JS sees the run as
@@ -83,6 +102,12 @@ class DeviceSyncAdapter(context: Context) :
             DeviceSyncRuns.close(run)
             // After startRun, which was posted first, so a listener it added is removed.
             main.post { run.detach() }
+        }
+        // A change pushed while the run was open: SyncManager dropped its
+        // request as a duplicate of this sync, so ask for the next one here.
+        if (run.syncAgainRequested) {
+            Log.i(TAG, "Sync ${run.runId} of $authority: changes arrived meanwhile, syncing again")
+            syncResult.fullSyncRequested = true
         }
     }
 
