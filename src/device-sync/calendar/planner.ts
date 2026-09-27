@@ -223,8 +223,9 @@ function revertGroup(local: LocalEvent, ctx: CalendarContext): OpGroup | null {
 /** Clears DIRTY where nothing uploadable changed, taking the rows as they are as the new baselines. */
 function cleanGroup(local: LocalEvent, computation: UploadComputation | null): OpGroup {
   const group = new GroupBuilder(refOf(local));
-  assertRow(group, local, false, true);
-  for (const x of local.exceptions) assertRow(group, x, true, true);
+  // Attendees and reminders of the dirty rows only (see `assertRow`), so a big meeting fits one transaction.
+  assertRow(group, local, false, local.dirty || local.deleted);
+  for (const x of local.exceptions) assertRow(group, x, true, x.dirty || x.deleted);
   const settle = (row: LocalEventRow, isException: boolean) => {
     if (!row.dirty) return;
     const truncated = isTruncatedBaseline(row.baseline?.cells[Events.DESCRIPTION]);

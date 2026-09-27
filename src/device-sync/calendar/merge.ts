@@ -15,7 +15,8 @@
  *
  * Every write into an existing item is guarded: the group first asserts
  * DIRTY and the projection the plan was made from (with attendees and
- * reminders when the item is dirty) and the number of exception rows.
+ * reminders for the rows that are dirty: a clean row's DIRTY catches any app
+ * edit of them) and the number of exception rows.
  */
 import { Events } from '../android-columns';
 import type { CalendarContext, EventBaseline, LocalEvent, LocalEventRow, LocalException } from '../planner';
@@ -284,11 +285,11 @@ export function writeEvent(
   const baseTarget = options.base ? { calendarRowId: local.calendarRowId, calendarId: ctx.calendarIdOfRow(local.calendarRowId)?.calendarId ?? target.calendarId } : target;
   const baseImage = options.base ? eventImage(baseEvent, baseTarget.calendarRowId, baseTarget.calendarId, ctx) ?? image : image;
   const lossy = isLossyEditor(local.mutators);
-  const itemDirty = local.dirty || local.exceptions.some((x) => x.dirty || x.deleted);
 
-  // Asserts first: the rows as read.
-  assertRow(group, local, false, itemDirty);
-  for (const x of local.exceptions) assertRow(group, x, true, itemDirty);
+  // Asserts first: the rows as read. Attendees and reminders only for dirty rows (see `assertRow`): a big
+  // meeting's occurrences would otherwise assert every attendee and outgrow one provider transaction.
+  assertRow(group, local, false, local.dirty || local.deleted);
+  for (const x of local.exceptions) assertRow(group, x, true, x.dirty || x.deleted);
   assertExceptionCount(group, local.eventId, linkedExceptionCount(local));
 
   let conflicts = 0;
