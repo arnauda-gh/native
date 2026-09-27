@@ -258,6 +258,7 @@ export class FakeDeviceProviders {
   private nextId = 1;
   private nextPhotoFile = 1000;
   private pendingFailure: { reason: BatchFailure; message: string } | null = null;
+  private partialFailure: { groups: number; reason: BatchFailure; when: (ops: ProviderOp[]) => boolean } | null = null;
   private beforeBatch: Array<() => void> = [];
   /** Every batch applied or refused, for assertions on write counts. */
   readonly batches: Array<{ account: string; authority: Authority; ops: ProviderOp[]; ok: boolean }> = [];
@@ -299,6 +300,16 @@ export class FakeDeviceProviders {
   /** Runs `fn` right before the next applyBatch is applied (a concurrent user edit). */
   beforeNextBatch(fn: () => void): void {
     this.beforeBatch.push(fn);
+  }
+
+  /**
+   * The next applyBatch that `when` matches behaves like a provider that
+   * yielded under contention: the ops before its `groups + 1`-th yield point
+   * (its first `groups` groups) are committed, then the batch fails with
+   * `reason` and the rest is rolled back.
+   */
+  partialCommitNextBatch(groups: number, reason: BatchFailure = 'assert', when: (ops: ProviderOp[]) => boolean = () => true): void {
+    this.partialFailure = { groups, reason, when };
   }
 
   /** Removes an account the way AccountManager does: the providers drop all its rows and SyncState. */
@@ -516,6 +527,19 @@ export class FakeDeviceProviders {
       return { ok: false, ...refusal };
     }
     for (const hook of this.beforeBatch.splice(0)) hook();
+
+    if (this.partialFailure?.when(ops)) {
+      const { groups, reason } = this.partialFailure;
+      this.partialFailure = null;
+      const starts = ops.flatMap((op, i) => (i === 0 || (op as { yieldAllowed?: boolean }).yieldAllowed ? [i] : []));
+      const cut = starts[groups] ?? 0;
+      if (cut > 0) {
+        const committed = this.applyBatch(accountName, authority, ops.slice(0, cut));
+        if (!committed.ok) return committed;
+      }
+      record(false);
+      return { ok: false, reason, message: `injected ${reason} after a yield point` };
+    }
 
     const snapshot = {
       tables: cloneTables(this.tables),

@@ -11,10 +11,12 @@
  *   and never a yield point: the stored state can't get ahead of its rows.
  *
  * A failed batch may have been committed up to a yield point the provider
- * took, so its groups are retried one by one (their asserts make a retry of
- * a committed group fail harmlessly); a group that fails an assert is
- * re-read and re-planned up to `maxReplans` times, then given up. `tooLarge`
- * splits the batch; `permission` ends the run.
+ * took, so its groups are retried one by one: a group planned from the rows
+ * as they are (`fresh`, a download) is planned again from a new read, any
+ * other is sent again (its asserts make a retry of a committed group fail);
+ * a group that fails an assert is re-read and re-planned up to `maxReplans`
+ * times, then given up. `tooLarge` splits the batch; `permission` ends the
+ * run.
  *
  * A group whose rows the SyncState describes (a group row: `groups`) carries
  * that `state` change: every batch that applies such a group, a retry
@@ -36,6 +38,11 @@ export interface Work {
   failed?(reason: BatchFailure, message: string): void | Promise<void>;
   /** What the SyncState lists changes with these rows: stored by the batch that applies them. */
   state?: StateChange;
+  /**
+   * Planned from the rows as they are (a download), so `replan` gives the same group or its echo: after a failed
+   * batch it is planned again instead of sent again (its asserts need not tell a committed group).
+   */
+  fresh?: boolean;
 }
 
 export interface BatchWriterOptions {
@@ -210,7 +217,14 @@ export class BatchWriter {
       await this.retryAlone(works[0], result.reason, result.message);
       return;
     }
-    for (const work of works) await this.applyAlone(work, 0);
+    for (const work of works) {
+      if (work.fresh && work.replan) {
+        const next = await work.replan();
+        if (next) await this.applyAlone(next, 1);
+      } else {
+        await this.applyAlone(work, 0);
+      }
+    }
     if (tail) await this.applyTail(tail);
   }
 

@@ -642,6 +642,7 @@ export abstract class ItemSync {
     return {
       group,
       state: this.listing(kind, acct, object.id, true),
+      fresh: true,
       applied: () => {
         if (plan.effect === 'insert') this.env.report.stats.downloaded.created++;
         else this.env.report.stats.downloaded.updated++;

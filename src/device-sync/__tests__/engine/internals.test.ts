@@ -157,6 +157,18 @@ describe('provider batches', () => {
     expect(store.committed.accounts.a.groups).toEqual(['a/g1']);
   });
 
+  it('plans a download again after a failed batch, which may have been committed up to a yield point', async () => {
+    let failures = 1;
+    const p = port((ops) => (failures-- > 0 ? { ok: false, reason: 'provider', message: 'failed after a yield point' } : ok(ops)));
+    const planned: Work = { group: { ref: 'a/1', ops: [{ op: 'update', table: 'events', id: 1, values: { title: 'Planned from the new read' } }] } };
+    const download: Work = { group: { ref: 'a/1', ops: [insert('data', { stale: 'group' })] }, fresh: true, replan: async () => planned };
+    const other: Work = { group: { ref: 'a/2', ops: [insert('raw_contacts')] } };
+
+    await writer(p).write([download, other]);
+
+    expect(p.sent.slice(1)).toEqual([planned.group.ops.map((op) => ({ ...op, yieldAllowed: true })), buildBatch([other.group])]);
+  });
+
   it('skips groups that only assert', async () => {
     const p = port(ok);
     await writer(p).write([{ group: { ref: 'g', ops: [{ op: 'assert', table: 'raw_contacts', id: 1, values: { dirty: 0 } }] } }]);

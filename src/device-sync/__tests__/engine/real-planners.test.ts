@@ -236,6 +236,29 @@ describe('device sync engine with the real planners', () => {
     });
   });
 
+  describe('a batch the provider committed up to a yield point before it failed', () => {
+    const alert = { al1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M' }, action: 'display' } };
+
+    it("never inserts a clean event's new reminder twice", async () => {
+      const h = real();
+      const event = (uid: string, title: string) =>
+        h.server.addEvent('a', { uid, title, start: '2026-10-06T12:00:00', duration: 'PT1H', timeZone: 'Europe/Berlin', calendarIds: { [h.calendar]: true } });
+      const lunch = event('lunch-uid', 'Lunch');
+      const retro = event('retro-uid', 'Retro');
+      await h.run(CALENDAR_AUTHORITY);
+      // Only an alert for Lunch (its row's columns stay), a new title for Retro: one download batch, two groups.
+      h.server.serverUpdate('CalendarEvent', 'a', lunch, { alerts: alert });
+      h.server.serverUpdate('CalendarEvent', 'a', retro, { title: 'Retrospective' });
+      h.device.partialCommitNextBatch(1, 'assert', (ops) => ops.some((op) => op.op === 'insert' && op.table === 'reminders'));
+
+      expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+
+      const row = h.events().find((e) => e.title === 'Lunch')!;
+      expect(h.device.rows('reminders').filter((r) => Number(r.event_id) === Number(row._id)).map((r) => r.minutes)).toEqual([15]);
+      expect(h.events().map((e) => e.title).sort()).toEqual(['Lunch', 'Retrospective']);
+    });
+  });
+
   describe('a device edit the server refuses (forbidden)', () => {
     it('puts a contact back in place, keeping what only the device knows', async () => {
       const h = real();
