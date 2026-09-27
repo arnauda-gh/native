@@ -109,6 +109,56 @@ class PushRoutingTest {
     }
 
     @Test
+    fun `reads a push the same way as the push task`() {
+        // kind (null: none), changed (null: none) → whether the mail task starts. The
+        // same table as MAIL_CASES in src/lib/__tests__/push-background-task.test.ts,
+        // whose carriesNoMail must agree.
+        val state = "jmap-state-change"
+        val emailPush = "jmap-email-push"
+        val cases: List<Triple<String?, String?, Boolean>> = listOf(
+            // No readable map: as before device sync.
+            Triple(state, null, true),
+            Triple(state, "", true),
+            Triple(state, "not json", true),
+            Triple(state, "[1]", true),
+            Triple(state, "{}", true),
+            // A map that names no type is read like a missing one.
+            Triple(state, """{"c":{}}""", true),
+            Triple(state, """{"c":{},"team":{}}""", true),
+            // An account entry that can't be read may be mail.
+            Triple(state, """{"c":null}""", true),
+            Triple(state, """{"c":"garbled","team":{"ContactCard":"s"}}""", true),
+            Triple(state, """{"c":[],"team":{"ContactCard":"s"}}""", true),
+            Triple(state, """{"c":5}""", true),
+            // Mail types anywhere in the map.
+            Triple(state, """{"c":{"EmailDelivery":"s"}}""", true),
+            Triple(state, """{"c":{"Email":"s"}}""", true),
+            Triple(state, """{"c":{"Mailbox":"s"}}""", true),
+            Triple(state, """{"c":{"ContactCard":"s1"},"team":{"EmailDelivery":"s2"}}""", true),
+            // Only a StateChange can say it carries no mail.
+            Triple(null, """{"c":{"ContactCard":"s"}}""", true),
+            Triple(emailPush, """{"c":{"EmailDelivery":"s"}}""", true),
+            Triple(emailPush, null, true),
+            // Contact and calendar changes, and types that say nothing about mail.
+            Triple(state, """{"c":{"ContactCard":"s1","AddressBook":"s2"}}""", false),
+            Triple(state, """{"c":{"CalendarEvent":"e1"},"team":{"Calendar":"c1"}}""", false),
+            Triple(state, """{"c":{"ContactCard":"s"},"team":{}}""", false),
+            Triple(state, """{"elsewhere":{"ContactCard":"s"}}""", false),
+            Triple(state, """{"c":{"Thread":"t1","ContactCard":"s1"}}""", false),
+        )
+        for ((kind, changed, mail) in cases) {
+            val data = buildMap<String, String> {
+                if (kind != null) put("kind", kind)
+                put("accountLabel", "alice")
+                put("accountId", "c")
+                put("emailIds", "[]")
+                if (changed != null) put("changed", changed)
+            }
+            assertEquals("kind=$kind changed=$changed", mail, PushRouting.decide(data, routes).startMailTask)
+        }
+    }
+
+    @Test
     fun `accounts without routes are ignored`() {
         val decision = PushRouting.decide(stateChange("""{"elsewhere":{"ContactCard":"s"}}"""), routes)
         assertTrue(decision.syncs.isEmpty())

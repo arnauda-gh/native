@@ -154,7 +154,7 @@ export function parseRelayPushData(data: unknown): RelayPushData {
     } catch {
       // ignore
     }
-  } else if (d.changed && typeof d.changed === 'object') {
+  } else if (d.changed && typeof d.changed === 'object' && !Array.isArray(d.changed)) {
     out.changed = d.changed as Record<string, Record<string, string>>;
   }
   // Older relays only sent `changed`; the account id is its first key.
@@ -389,14 +389,17 @@ const MAIL_TYPES = ['EmailDelivery', 'Email', 'Mailbox'];
  * calendar changes, which the native push router already turned into device
  * syncs (#34, docs/device-sync.md "Triggers"). Without a mail type there is
  * nothing to notify, and the legacy path (the newest unread mail) must not
- * run for it. An empty or missing `changed` map keeps the old behaviour.
+ * run for it. A missing map, or one that names no type, keeps the old
+ * behaviour, and an account entry it can't read may be mail. The same rules
+ * as PushRouting.decide, so the two never disagree about a push.
  */
 export function carriesNoMail(payload: RelayPushData): boolean {
   if (payload.kind !== 'jmap-state-change' || !payload.changed) return false;
-  const accounts = Object.values(payload.changed);
-  if (accounts.length === 0) return false;
-  return !accounts.some((types) => !!types && typeof types === 'object'
-    && MAIL_TYPES.some((type) => type in types));
+  const entries: unknown[] = Object.values(payload.changed);
+  if (entries.some((types) => !types || typeof types !== 'object' || Array.isArray(types))) return false;
+  const types = entries.flatMap((entry) => Object.keys(entry as Record<string, unknown>));
+  if (types.length === 0) return false;
+  return !types.some((type) => MAIL_TYPES.includes(type));
 }
 
 // Fired by BulwarkPushTaskService when a data FCM message arrives. Runs in a

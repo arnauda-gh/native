@@ -13,9 +13,11 @@ import org.json.JSONObject
  * The relay forwards the JMAP StateChange's `changed` map verbatim (FCM data
  * key `changed`: JMAP account id → type → state; only its first account is
  * repeated as `accountId`), so every account key is looked at. The mail task
- * runs only for mail: when some account's map has a mail type, for an
- * EmailPush, or when `changed` is missing or unreadable (older relays), so a
- * contact change never ends in a mail notification.
+ * runs only for mail: when some account's map has a mail type, for anything
+ * but a StateChange (an EmailPush), when `changed` is missing, unreadable or
+ * names no type (older relays), or when an account's entry is unreadable, so
+ * a contact change never ends in a mail notification. The push task's guard
+ * (`carriesNoMail` in src/lib/push-background-task.ts) applies the same rules.
  */
 object PushRouting {
     /** An Android account and the authorities it syncs, fed by one JMAP account. */
@@ -27,7 +29,7 @@ object PushRouting {
         val startMailTask: Boolean,
     )
 
-    private const val EMAIL_PUSH_KIND = "jmap-email-push"
+    private const val STATE_CHANGE_KIND = "jmap-state-change"
 
     /**
      * Types that may mean new mail: `EmailDelivery`, and `Email`/`Mailbox`,
@@ -42,7 +44,8 @@ object PushRouting {
 
     fun decide(data: Map<String, String>, routes: Map<String, List<Route>>): Decision {
         val changed = data["changed"]?.let(::parseChanged)
-        var mail = data["kind"] == EMAIL_PUSH_KIND || changed == null
+        // Only a StateChange can say it carries no mail.
+        var mail = data["kind"] != STATE_CHANGE_KIND || changed == null
         val syncs = LinkedHashSet<Pair<String, String>>()
         for ((jmapAccountId, types) in changed.orEmpty()) {
             if (types == null) {

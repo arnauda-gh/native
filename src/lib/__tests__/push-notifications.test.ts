@@ -409,7 +409,7 @@ describe('push types for device sync (#34)', () => {
   }
 
   // A server that does not know a type refuses the whole write.
-  const refusedTypes = (types: string[] | undefined) => {
+  const refuseUnknownTypes = (types: string[] | undefined) => {
     const unknown = (types ?? []).filter((type) => type !== 'EmailDelivery');
     if (unknown.length > 0) throw new JMAPMethodError('invalidProperties', `Unknown types: ${unknown.join(', ')}`);
   };
@@ -458,7 +458,7 @@ describe('push types for device sync (#34)', () => {
       capabilities: { 'urn:ietf:params:jmap:core': {} },
     };
     createMock.mockImplementation(async (params: { types: string[] }) => {
-      refusedTypes(params.types);
+      refuseUnknownTypes(params.types);
       return CREATED;
     });
     const result = await setupPushNotifications({ relayBaseUrl: RELAY });
@@ -483,10 +483,10 @@ describe('push types for device sync (#34)', () => {
   it('keeps mail push on a server that refuses the device sync types', async () => {
     await syncing({ [CONTACTS]: true });
     createMock.mockImplementation(async (params: { types: string[] }) => {
-      refusedTypes(params.types);
+      refuseUnknownTypes(params.types);
       return CREATED;
     });
-    updateMock.mockImplementation(async (_id: string, patch: { types?: string[] }) => refusedTypes(patch.types));
+    updateMock.mockImplementation(async (_id: string, patch: { types?: string[] }) => refuseUnknownTypes(patch.types));
 
     // A new subscription: mail-only rather than none.
     const created = await setupPushNotifications({ relayBaseUrl: RELAY });

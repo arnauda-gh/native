@@ -238,6 +238,63 @@ describe('pushes for device sync (#34)', () => {
     expect(jmapClient.getStoredCredentials).toHaveBeenCalledWith(LOCAL);
   });
 
+  // kind (undefined: none), changed (undefined: none) → whether the push may
+  // carry mail. The same table as "reads a push the same way as the push task"
+  // in PushRoutingTest.kt, whose startMailTask must agree.
+  const STATE = 'jmap-state-change';
+  const EMAIL_PUSH = 'jmap-email-push';
+  const MAIL_CASES: Array<[string | undefined, string | undefined, boolean]> = [
+    // No readable map: as before device sync.
+    [STATE, undefined, true],
+    [STATE, '', true],
+    [STATE, 'not json', true],
+    [STATE, '[1]', true],
+    [STATE, '{}', true],
+    // A map that names no type is read like a missing one.
+    [STATE, '{"c":{}}', true],
+    [STATE, '{"c":{},"team":{}}', true],
+    // An account entry that can't be read may be mail.
+    [STATE, '{"c":null}', true],
+    [STATE, '{"c":"garbled","team":{"ContactCard":"s"}}', true],
+    [STATE, '{"c":[],"team":{"ContactCard":"s"}}', true],
+    [STATE, '{"c":5}', true],
+    // Mail types anywhere in the map.
+    [STATE, '{"c":{"EmailDelivery":"s"}}', true],
+    [STATE, '{"c":{"Email":"s"}}', true],
+    [STATE, '{"c":{"Mailbox":"s"}}', true],
+    [STATE, '{"c":{"ContactCard":"s1"},"team":{"EmailDelivery":"s2"}}', true],
+    // Only a StateChange can say it carries no mail.
+    [undefined, '{"c":{"ContactCard":"s"}}', true],
+    [EMAIL_PUSH, '{"c":{"EmailDelivery":"s"}}', true],
+    [EMAIL_PUSH, undefined, true],
+    // Contact and calendar changes, and types that say nothing about mail.
+    [STATE, '{"c":{"ContactCard":"s1","AddressBook":"s2"}}', false],
+    [STATE, '{"c":{"CalendarEvent":"e1"},"team":{"Calendar":"c1"}}', false],
+    [STATE, '{"c":{"ContactCard":"s"},"team":{}}', false],
+    [STATE, '{"elsewhere":{"ContactCard":"s"}}', false],
+    [STATE, '{"c":{"Thread":"t1","ContactCard":"s1"}}', false],
+  ];
+
+  it('reads a push the same way as the native router', () => {
+    for (const [kind, changed, mail] of MAIL_CASES) {
+      const data: Record<string, string> = { accountLabel: 'alice', accountId: 'c', emailIds: '[]' };
+      if (kind !== undefined) data.kind = kind;
+      if (changed !== undefined) data.changed = changed;
+      expect(carriesNoMail(parseRelayPushData(data)), `kind=${kind} changed=${changed}`).toBe(!mail);
+    }
+    // Native code hands `changed` over as a string; a map that is not an
+    // object is unreadable in any form.
+    expect(carriesNoMail(parseRelayPushData({ kind: STATE, changed: [{ ContactCard: 's' }] }))).toBe(false);
+  });
+
+  it("looks for mail when it can't read an account's entry, as the native router does", async () => {
+    for (const changed of ['{"jmap-primary":null}', '{"jmap-primary":{}}']) {
+      vi.clearAllMocks();
+      await pushBackgroundTask({ kind: STATE, accountLabel: 'alice', accountId: 'jmap-primary', emailIds: '[]', changed });
+      expect(jmapClient.getStoredCredentials, changed).toHaveBeenCalledWith(LOCAL);
+    }
+  });
+
   it('takes an Email or Mailbox change for possible mail, as a subscription from an older build sends it', () => {
     expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Email: 's1', Mailbox: 's2' } })))).toBe(false);
     expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Email: 's1' } })))).toBe(false);
