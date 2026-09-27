@@ -189,9 +189,10 @@ export abstract class ItemSync {
    * One account's collections, or null when the account refuses to list them
    * (`forbidden`, `accountNotFound`, `accountNotSupportedByMethod`): Stalwart
    * lists an account shared for mail only with every capability, and access
-   * can go away. Such an account is left out of the run and reported; the
-   * rows written for it stay as they are, since a refusal can pass and must
-   * not drop anything from the device.
+   * can go away. Such an account is left out of the run, and not reported
+   * as a problem: for a mail-only share there is nothing to fix, and the
+   * warning would never go away. The rows written for it stay as they are,
+   * since a refusal can pass and must not drop anything from the device.
    */
   protected async containersOf<T>(
     type: 'AddressBook' | 'Calendar',
@@ -203,7 +204,6 @@ export abstract class ItemSync {
     } catch (error) {
       if (!isMethodError(error) || !ACCOUNT_UNREADABLE.has(error.type)) throw error;
       this.unreadable.add(accountId);
-      this.env.report.itemError({ ref: accountId, side: 'download', type: error.type, description: error.message });
       this.env.log(`account ${accountId} left out: ${error.type}`);
       return null;
     }

@@ -621,7 +621,7 @@ describe('device sync engine: accounts that refuse access', () => {
     const report = await h.run();
 
     expect(report.outcome).toBe('ok');
-    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: 'team', side: 'download', type: 'forbidden' })]);
+    expect(report.itemErrors).toEqual([]);
     expect(h.contactNamed('Ada')).toBeDefined();
   });
 
@@ -665,7 +665,7 @@ describe('device sync engine: accounts that refuse access', () => {
     const report = await h.run(CALENDAR_AUTHORITY);
 
     expect(report.outcome).toBe('ok');
-    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: 'team', type: 'forbidden' })]);
+    expect(report.itemErrors).toEqual([]);
     expect(h.events()).toHaveLength(1);
     expect(h.device.rows('calendars').some((c) => c._sync_id === `team/${teamCalendar}`)).toBe(true);
   });
