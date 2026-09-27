@@ -375,6 +375,65 @@ describe('sign-out', () => {
     expect(confirm).toHaveBeenCalledWith(4);
     expect(h.state.accounts).toEqual([]);
   });
+
+  it('waits for a turn-on in progress, then releases what it set up', async () => {
+    let finishEnsure: () => void = () => undefined;
+    vi.mocked(native.ensureAndroidAccount).mockImplementationOnce(async (name: string, registryId: string) => {
+      h.state.log.push(`ensure ${name}`);
+      await new Promise<void>((resolve) => { finishEnsure = resolve; });
+      h.state.accounts.push({ name, registryId, sync: {} });
+      return true;
+    });
+    const turningOn = enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    await vi.waitFor(() => expect(h.state.log).toContain('ensure alice'));
+
+    const signingOut = releaseDeviceSyncBeforeSignOut([ALICE], vi.fn(async () => true));
+    finishEnsure();
+
+    expect(await signingOut).toBe(true);
+    await turningOn;
+    expect(teardown).toHaveBeenCalledWith(ALICE, 'alice', CONTACTS_AUTHORITY, { uploadFirst: true, timeoutMs: TEARDOWN_TIMEOUT_MS });
+    expect(h.state.accounts).toEqual([]);
+    expect(useDeviceSyncStore.getState().accounts[ALICE]).toBeUndefined();
+  });
+
+  it('lets a turn-on or turn-off asked for during the sign-out set nothing up for the account', async () => {
+    await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    let finishTeardown: () => void = () => undefined;
+    teardown.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishTeardown = resolve; });
+      return { pending: 0 };
+    });
+    const signingOut = releaseDeviceSyncBeforeSignOut([ALICE], vi.fn(async () => true));
+    await vi.waitFor(() => expect(teardown).toHaveBeenCalled());
+
+    const turningOn = enableDeviceSync(ALICE, CALENDAR_AUTHORITY);
+    const turningOff = disableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    finishTeardown();
+
+    expect(await signingOut).toBe(true);
+    expect((await turningOn).kind).toBe('failed');
+    expect(await turningOff).toEqual({ done: true, pending: 0 });
+    expect(h.state.accounts).toEqual([]);
+    expect(h.state.log.filter((l) => l.startsWith('ensure') || l.startsWith('sync'))).toEqual(['ensure alice', `sync alice ${CONTACTS_AUTHORITY} {"manual":true}`]);
+    expect(useDeviceSyncStore.getState().accounts[ALICE]).toBeUndefined();
+  });
+
+  it('lets a turn-on asked for during the sign-out go ahead once the user chose to stay signed in', async () => {
+    await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    teardown.mockImplementation(async (_r: string, _n: string, authority: string) => ({ pending: authority === CONTACTS_AUTHORITY ? 1 : 0 }));
+    let answer: (signOut: boolean) => void = () => undefined;
+    const confirm = vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+    const signingOut = releaseDeviceSyncBeforeSignOut([ALICE], confirm);
+    await vi.waitFor(() => expect(confirm).toHaveBeenCalled());
+
+    const turningOn = enableDeviceSync(ALICE, CALENDAR_AUTHORITY);
+    answer(false);
+
+    expect(await signingOut).toBe(false);
+    expect(await turningOn).toEqual({ kind: 'enabled', accountName: 'alice' });
+    expect(h.find('alice')?.sync[CALENDAR_AUTHORITY].automatic).toBe(true);
+  });
 });
 
 describe('reconcile', () => {

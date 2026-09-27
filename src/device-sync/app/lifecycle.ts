@@ -180,6 +180,25 @@ function oneAtATime<T>(registryId: string, step: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** One step in the queue of every one of the accounts, taken in a fixed order so two such steps never wait for each other. */
+function oneAtATimeForAll<T>(registryIds: readonly string[], step: () => Promise<T>): Promise<T> {
+  const [first, ...rest] = registryIds;
+  return first === undefined ? step() : oneAtATime(first, () => oneAtATimeForAll(rest, step));
+}
+
+// Sign-outs under way, per app account: true once they released it.
+const signOuts = new Map<string, Promise<boolean>>();
+
+/**
+ * A turn-on or turn-off of one app account, in its queue. One asked for
+ * while the account signs out runs after the sign-out, and does nothing
+ * (`released`) when that released the account.
+ */
+function accountStep<T>(registryId: string, step: () => Promise<T>, released: T): Promise<T> {
+  const signOut = signOuts.get(registryId);
+  return oneAtATime(registryId, async () => ((await signOut) ? released : step()));
+}
+
 // ─── Enable ────────────────────────────────────────────
 
 export type EnableOutcome =
@@ -193,7 +212,7 @@ export type EnableOutcome =
  * asked for the permissions (and, for calendars, who reminds the user).
  */
 export function enableDeviceSync(registryId: string, authority: Authority): Promise<EnableOutcome> {
-  return oneAtATime(registryId, () => enable(registryId, authority));
+  return accountStep(registryId, () => enable(registryId, authority), { kind: 'failed', message: 'The account was signed out' });
 }
 
 async function enable(registryId: string, authority: Authority): Promise<EnableOutcome> {
@@ -230,7 +249,7 @@ async function enable(registryId: string, authority: Authority): Promise<EnableO
 
 /** Automatic sync back on after the user kept syncing instead of losing changes. */
 export function resumeDeviceSync(registryId: string, authority: Authority): Promise<void> {
-  return oneAtATime(registryId, () => resume(registryId, authority));
+  return accountStep(registryId, () => resume(registryId, authority), undefined);
 }
 
 async function resume(registryId: string, authority: Authority): Promise<void> {
@@ -316,7 +335,8 @@ export function disableDeviceSync(
   authority: Authority,
   options: { force?: boolean } = {},
 ): Promise<TurnOffResult> {
-  return oneAtATime(registryId, () => disable(registryId, authority, options));
+  // Released for signing out meanwhile: nothing of it is left on the device.
+  return accountStep(registryId, () => disable(registryId, authority, options), { done: true, pending: 0 });
 }
 
 async function disable(registryId: string, authority: Authority, options: { force?: boolean }): Promise<TurnOffResult> {
@@ -363,21 +383,31 @@ async function disable(registryId: string, authority: Authority, options: { forc
  * rows and removes their Android accounts, while the credentials are still
  * there. When changes could not be uploaded, `confirm` asks whether to sign
  * out anyway. Resolves false when the user chose to stay signed in; their
- * accounts then keep syncing.
+ * accounts then keep syncing. It is a step of the accounts' own turn-ons and
+ * turn-offs: it waits for those under way, and those asked for meanwhile find
+ * the accounts released and do nothing.
  */
-export async function releaseDeviceSyncBeforeSignOut(
+export function releaseDeviceSyncBeforeSignOut(
   registryIds: readonly string[],
   confirm: (pending: number) => Promise<boolean> = confirmSignOutLosingChanges,
 ): Promise<boolean> {
-  if (!deviceSyncAvailable() || registryIds.length === 0) return true;
-  try {
-    return await release(registryIds, confirm);
-  } catch (err) {
-    // Never keep the user from signing out over a bug here; an Android
-    // account left behind is suspended by the next reconcile.
-    console.warn('[device-sync] release before sign-out failed', errorMessage(err));
-    return true;
-  }
+  if (!deviceSyncAvailable() || registryIds.length === 0) return Promise.resolve(true);
+  const ids = [...new Set(registryIds)].sort();
+  const signOut = oneAtATimeForAll(ids, async () => {
+    try {
+      return await release(registryIds, confirm);
+    } catch (err) {
+      // Never keep the user from signing out over a bug here; an Android
+      // account left behind is suspended by the next reconcile.
+      console.warn('[device-sync] release before sign-out failed', errorMessage(err));
+      return true;
+    }
+  });
+  for (const id of ids) signOuts.set(id, signOut);
+  void signOut.then(() => {
+    for (const id of ids) if (signOuts.get(id) === signOut) signOuts.delete(id);
+  });
+  return signOut;
 }
 
 async function release(
