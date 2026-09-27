@@ -91,7 +91,7 @@ class DeviceSyncAdapter(context: Context) :
             val outcome = SyncReports.outcome(run.report, run.endReason)
             SyncReports.apply(outcome, syncResult)
             Log.i(TAG, "Sync ${run.runId} of $authority ended (${run.endReason}) after " +
-                "${SystemClock.elapsedRealtime() - startedAt} ms: $outcome")
+                "${SystemClock.elapsedRealtime() - startedAt} ms: ${SyncReports.summary(run.report)}; $outcome")
         } catch (e: InterruptedException) {
             // onSyncCanceled interrupts this thread. JS sees the run as
             // cancelled at its next checkpoint (isRunCancelled).

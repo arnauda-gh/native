@@ -74,6 +74,28 @@ object SyncReports {
         }
     }
 
+    /**
+     * One line for logcat: the report's outcome, its message and how many
+     * items failed. The reason a run failed is otherwise only in the report,
+     * and JS warnings from a headless run don't reach logcat.
+     */
+    fun summary(reportJson: String?): String {
+        if (reportJson == null) return "no report"
+        val report = try {
+            JSONObject(reportJson)
+        } catch (e: JSONException) {
+            return "unreadable report"
+        }
+        val parts = mutableListOf("outcome=" + report.optString("outcome", "?"))
+        val items = report.optJSONArray("itemErrors")?.length() ?: 0
+        if (items > 0) parts += "itemErrors=$items"
+        val message = report.optString("message", "")
+        if (message.isNotEmpty()) parts += "message=" + message.take(MAX_LOGGED_MESSAGE)
+        return parts.joinToString(" ")
+    }
+
+    private const val MAX_LOGGED_MESSAGE = 300
+
     fun apply(outcome: SyncOutcome, result: SyncResult) {
         result.stats.numIoExceptions += outcome.ioErrors
         result.stats.numAuthExceptions += outcome.authErrors

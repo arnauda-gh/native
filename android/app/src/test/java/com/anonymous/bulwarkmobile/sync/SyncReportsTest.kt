@@ -81,4 +81,19 @@ class SyncReportsTest {
     fun `an outcome this build does not know is retried`() {
         assertEquals(1L, SyncReports.outcome(report("somethingNew"), "reported").ioErrors)
     }
+
+    @Test
+    fun `the log summary names the outcome, failed items and the message`() {
+        assertEquals("outcome=ok", SyncReports.summary(report("ok")))
+        assertEquals(
+            "outcome=internal message=Invalid column x",
+            SyncReports.summary(report("internal", ",\"message\":\"Invalid column x\"")),
+        )
+        val withItems = report("ok").replace("\"itemErrors\":[]", "\"itemErrors\":[{\"ref\":\"a\"},{\"ref\":\"b\"}]")
+        assertEquals("outcome=ok itemErrors=2", SyncReports.summary(withItems))
+        assertEquals("no report", SyncReports.summary(null))
+        assertEquals("unreadable report", SyncReports.summary("{"))
+        val long = SyncReports.summary(report("io", ",\"message\":\"" + "m".repeat(400) + "\""))
+        assertEquals("outcome=io message=".length + 300, long.length)
+    }
 }
