@@ -1390,12 +1390,31 @@ export abstract class ItemSync {
       }];
     }
     await this.beforePlanning(acct, [object]);
+    // An edit is undone in place, so what only the device keeps stays: a star, a ringtone, a joined contact, row ids.
+    if (objectKind === kind && !p.meta.deleted) return [this.overwriteWork(acct, kind, local, object)];
     const insert = objectKind.planDownload(object, null, acct);
     return [{
       group: concatGroups(ref, remove, insert.ops),
       state: both(this.listing(kind, acct, object.id, false), this.listing(objectKind, acct, object.id, true)),
       applied: () => this.onDownloaded(objectKind, acct, object),
     }];
+  }
+
+  /** The rows become `object` where they are and DIRTY is cleared (the planner's write of an accepted version). */
+  private overwriteWork(acct: string, kind: Kind, local: unknown, object: ServerObject): Work {
+    return {
+      group: kind.planAccepted(local, object, acct).ops,
+      state: this.listing(kind, acct, object.id, true),
+      applied: () => this.onDownloaded(kind, acct, object),
+      replan: async () => {
+        const again = await this.reload(kind, local);
+        return again === null ? null : this.overwriteWork(acct, kind, again, object);
+      },
+      failed: (reason, message) => {
+        this.markStale(acct, object.id);
+        this.env.report.itemError({ ref: refOf(acct, object.id), side: 'upload', type: reason, description: message });
+      },
+    };
   }
 
   /**

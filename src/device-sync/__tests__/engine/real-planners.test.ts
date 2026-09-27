@@ -13,6 +13,7 @@ import {
   CALENDAR_AUTHORITY,
   CONTACTS_AUTHORITY,
   createHarness,
+  renameDeviceContact,
   rowWrites,
   type Harness,
 } from './harness';
@@ -232,6 +233,62 @@ describe('device sync engine with the real planners', () => {
       expect(h.server.get('ContactCard', 'a', group)!.members ?? {}).toEqual({});
       expect(h.contacts().find((c) => c.id === contact.id)).toMatchObject({ dirty: false });
       expect(h.device.rows('data').filter((d) => d.mimetype === MimeType.GROUP_MEMBERSHIP)).toEqual([]);
+    });
+  });
+
+  describe('a device edit the server refuses (forbidden)', () => {
+    it('puts a contact back in place, keeping what only the device knows', async () => {
+      const h = real();
+      const [ada] = addServerCards(h, ['Ada Lovelace']);
+      await h.run();
+      const before = h.contactNamed('Ada Lovelace')!;
+      h.device.user.star(before.id);
+      renameDeviceContact(h, before.id, 'Ada King');
+      h.server.setErrorFor('ContactCard', 'a', ada, { type: 'forbidden' });
+
+      const report = await h.run();
+
+      expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${ada}`, type: 'forbidden' })]);
+      expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ name: { full: 'Ada Lovelace' } });
+      expect(h.contacts()).toEqual([expect.objectContaining({ id: before.id, name: 'Ada Lovelace', dirty: false })]);
+      expect(h.contacts()[0].row.starred).toBe(1);
+    });
+
+    it('brings a contact back whose deletion the server refuses', async () => {
+      const h = real();
+      const [ada] = addServerCards(h, ['Ada Lovelace']);
+      await h.run();
+      h.device.user.deleteContact(h.contactNamed('Ada Lovelace')!.id);
+      h.server.setErrorFor('ContactCard', 'a', ada, { type: 'forbidden' });
+
+      const report = await h.run();
+
+      expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${ada}`, type: 'forbidden' })]);
+      expect(h.server.get('ContactCard', 'a', ada)).toBeDefined();
+      expect(h.contacts()).toEqual([expect.objectContaining({ sourceId: `a/${ada}`, name: 'Ada Lovelace', dirty: false, deleted: false })]);
+    });
+
+    it('puts an event back in place', async () => {
+      const h = real();
+      const standup = h.server.addEvent('a', {
+        uid: 'standup-uid',
+        title: 'Standup',
+        start: '2026-09-28T09:00:00',
+        duration: 'PT15M',
+        timeZone: 'Europe/Berlin',
+        calendarIds: { [h.calendar]: true },
+      });
+      await h.run(CALENDAR_AUTHORITY);
+      const row = h.events()[0];
+      h.device.user.updateEvent(Number(row._id), { [Events.TITLE]: 'Mine', [Events.CUSTOM_APP_PACKAGE]: 'org.example.app' });
+      h.server.setErrorFor('CalendarEvent', 'a', standup, { type: 'forbidden' });
+
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${standup}`, type: 'forbidden' })]);
+      expect(h.events()).toEqual([
+        expect.objectContaining({ _id: row._id, title: 'Standup', dirty: 0, [Events.CUSTOM_APP_PACKAGE]: 'org.example.app' }),
+      ]);
     });
   });
 
