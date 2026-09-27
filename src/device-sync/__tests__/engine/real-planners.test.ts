@@ -217,6 +217,42 @@ describe('device sync engine with the real planners', () => {
       expect(h.contacts().find((c) => c.name === 'Ada Lovelace')).toMatchObject({ dirty: false });
     });
 
+    describe('an upload that downloads nothing first', () => {
+      /** Ada in Friends (and Grace); Ada's name edited in place (AOSP); nothing new on the server. */
+      async function adaRenamedInFriends() {
+        const h = real();
+        const [ada, grace] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+        const uid = h.server.get('ContactCard', 'a', ada)!.uid as string;
+        h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { [uid]: true } });
+        expect((await h.run()).outcome).toBe('ok');
+        const row = h.contactNamed('Ada Lovelace')!.id;
+        h.device.user.updateData(Number(h.nameDataRow(row)!._id), { [Data.DATA1]: 'Ada King' });
+        const memberships = () => h.device.rows('data').filter((d) => Number(d.raw_contact_id) === row && d.mimetype === MimeType.GROUP_MEMBERSHIP);
+        return { h, ada, grace, memberships };
+      }
+
+      it("keeps the uploaded contact's memberships in a sync run", async () => {
+        const { h, ada, memberships } = await adaRenamedInFriends();
+
+        expect((await h.run()).outcome).toBe('ok');
+
+        expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ name: { full: 'Ada King' } });
+        expect(memberships()).toHaveLength(1);
+      });
+
+      it("keeps the uploaded contact's memberships in a teardown's upload", async () => {
+        const { h, ada, grace, memberships } = await adaRenamedInFriends();
+        // Grace's edit cannot go up, so the teardown keeps every row and asks.
+        renameDeviceContact(h, h.contactNamed('Grace Hopper')!.id, 'Grace B. Hopper');
+        h.server.setErrorFor('ContactCard', 'a', grace, { type: 'tooLarge' });
+
+        expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 1 });
+
+        expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ name: { full: 'Ada King' } });
+        expect(memberships()).toHaveLength(1);
+      });
+    });
+
     it('uploads a removal from a group in a run that downloads no contact', async () => {
       const h = real();
       // A keyed phone row shows the editor works in place, so a missing membership row is a removal.
