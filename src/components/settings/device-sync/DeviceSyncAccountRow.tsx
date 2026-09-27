@@ -78,6 +78,9 @@ function askReminderOwner(t: TranslateFn): Promise<ReminderOwner | null> {
   });
 }
 
+/** How often the status line's "… ago" is brought up to date. */
+const RELATIVE_TIME_REFRESH_MS = 30_000;
+
 export function DeviceSyncAccountRow({ account, authority }: Props) {
   const c = useColors();
   const styles = React.useMemo(() => makeStyles(c), [c]);
@@ -91,6 +94,12 @@ export function DeviceSyncAccountRow({ account, authority }: Props) {
   const onInApp = syncOnInApp(entry, authority);
   const { view, permitted, refresh } = useAndroidSync(entry.androidAccountName, authority);
   const [busy, setBusy] = React.useState<Busy>(null);
+  // "Synced 2 min ago" keeps counting while the settings stay open.
+  const [now, setNow] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), RELATIVE_TIME_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
   const [prompt, setPrompt] = React.useState<Prompt | null>(null);
   const [chooserOpen, setChooserOpen] = React.useState(false);
 
@@ -117,7 +126,7 @@ export function DeviceSyncAccountRow({ account, authority }: Props) {
       permitted,
       syncing: !!view?.active,
       lastRun: entry.lastRun[authority],
-      now: Date.now(),
+      now,
     },
     t,
   );
