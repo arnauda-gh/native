@@ -94,6 +94,43 @@ describe('calendar device edits through the engine', () => {
     expect(h.batches.log.slice(before).filter((ops) => ops.some((op) => op.op !== 'syncState' && op.op !== 'assert'))).toEqual([]);
   });
 
+  it('sends an answer to one occurrence in a calendar that grants only RSVP, and reports a refusal', async () => {
+    const h = real({ accounts: 'withShared' });
+    const team = h.server.addCalendar('team', {
+      name: 'Team events',
+      myRights: { mayReadFreeBusy: true, mayReadItems: true, mayWriteAll: false, mayWriteOwn: false, mayUpdatePrivate: false, mayRSVP: true, mayShare: false, mayDelete: false },
+    });
+    h.prefs.calendarSelection[`team/${team}`] = true;
+    const id = h.server.addEvent('team', {
+      uid: 'team-weekly',
+      title: 'Team weekly',
+      start: '2026-10-05T09:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', count: 5 },
+      organizerCalendarAddress: 'mailto:boss@example.net',
+      participants: {
+        boss: { '@type': 'Participant', calendarAddress: 'mailto:boss@example.net', roles: { owner: true }, participationStatus: 'accepted' },
+        me: { '@type': 'Participant', calendarAddress: 'mailto:alice@example.com', roles: { attendee: true }, participationStatus: 'needs-action' },
+      },
+      calendarIds: { [team]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const master = h.events().find((e) => e[Events._SYNC_ID] === `team/${id}`)!;
+
+    // Etar answers the Oct 12 occurrence through CONTENT_EXCEPTION_URI.
+    h.device.user.exceptionViaUri(Number(master._id), Date.UTC(2026, 9, 12, 7), { [Events.SELF_ATTENDEE_STATUS]: 2, [Events.STATUS]: 1 });
+    const sets = () => h.server.requests.filter((r) => r.methods.includes('CalendarEvent/set')).length;
+    const before = sets();
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    // The answer was sent (this server takes no RSVP without write rights), the refusal is reported and the row put back.
+    expect(sets()).toBeGreaterThan(before);
+    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `team/${id}`, side: 'upload', type: 'forbidden' })]);
+    expect(h.events().filter((e) => e[Events.ORIGINAL_SYNC_ID] === `team/${id}`)).toEqual([]);
+    expect(h.events().every((e) => Number(e[Events.DIRTY] ?? 0) === 0)).toBe(true);
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {

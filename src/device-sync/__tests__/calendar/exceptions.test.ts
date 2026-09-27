@@ -225,6 +225,33 @@ describe('calendar planner: recurrence edits made on the device', () => {
     expect(action.sendSchedulingMessages).toBe(true);
   });
 
+  it('lets an answer to one occurrence through in a calendar that grants only RSVP, and nothing more', async () => {
+    const invite = weekly();
+    invite.calendarIds = { r: true };
+    invite.organizerCalendarAddress = 'mailto:boss@example.net';
+    invite.participants = {
+      boss: { calendarAddress: 'mailto:boss@example.net', roles: { owner: true }, participationStatus: 'accepted' },
+      me: { calendarAddress: 'mailto:usera@example.org', roles: { attendee: true }, participationStatus: 'needs-action' },
+    };
+    const { h, id } = await synced(invite);
+    // Etar answers Oct 19 through CONTENT_EXCEPTION_URI (a new override)...
+    const added = h.fake.user.exceptionViaUri(id, utc('2026-10-19T13:00:00Z'), { [Events.SELF_ATTENDEE_STATUS]: 2, [Events.STATUS]: 1 });
+    // ... and another app answers the existing override of Oct 7 on its row.
+    const existing = (await h.local('bl'))!.exceptions.find((x) => x.recurrenceId === '2026-10-07T09:00:00')!;
+    h.fake.table('attendees').forEach((a) => {
+      if (a.event_id === existing.eventId && a[Attendees.ATTENDEE_EMAIL] === ME) a[Attendees.ATTENDEE_STATUS] = 1;
+    });
+    h.fake.user.updateEvent(existing.eventId, {});
+    const action = patchOf(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx));
+    type Answer = { participants: Record<string, { participationStatus?: string }> };
+    expect((action.patch['recurrenceOverrides/2026-10-19T09:00:00'] as Answer).participants.me.participationStatus).toBe('declined');
+    expect((action.patch['recurrenceOverrides/2026-10-07T09:00:00/participants'] as Answer['participants']).me.participationStatus).toBe('accepted');
+    expect(action.sendSchedulingMessages).toBe(true);
+    // Anything more than the answer is still the calendar owner's to change.
+    h.fake.user.updateEvent(added, { [Events.TITLE]: 'Mine now' });
+    expect(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx).kind).toBe('revert');
+  });
+
   it('turns EXDATE entries an app adds or removes into exclusions and re-inclusions', async () => {
     const { h, id } = await synced(weekly());
     h.fake.user.updateEvent(id, { [Events.EXDATE]: '20261012T130000Z\nAmerica/New_York;20261021T090000' });

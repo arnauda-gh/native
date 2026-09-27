@@ -308,9 +308,8 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
     return m && computation.patch[k] === true && ctx.isReadOnly(m[1]);
   });
   if ((readOnly && keys.length) || movedToReadOnly) {
-    // RSVP is the one change a calendar without write rights may take.
-    const rsvpOnly = keys.length > 0 && keys.every((k) => /^participants\/[^/]+\/participationStatus$/.test(k));
-    if (!(rsvpOnly && ctx.calendar(calendar.calendarId)?.myRights?.mayRSVP && !movedToReadOnly)) {
+    // RSVP, to the series or to occurrences, is the one change a calendar without write rights may take.
+    if (!(computation.rsvpOnly && ctx.calendar(calendar.calendarId)?.myRights?.mayRSVP && !movedToReadOnly)) {
       const ops = revertGroup(local, ctx);
       return ops ? { kind: 'revert', ops } : { kind: 'skip', reason: 'readOnly' };
     }

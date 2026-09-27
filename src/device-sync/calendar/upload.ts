@@ -169,6 +169,8 @@ export interface UploadComputation {
   /** Exception rows whose instance is excluded by the patch, or already was. */
   removedExceptions: Set<number>;
   sendSchedulingMessages: boolean;
+  /** The patch holds nothing but the user's own answer, to the series or to occurrences (what `mayRSVP` allows). */
+  rsvpOnly: boolean;
   /** Units changed on the device that can't be uploaded (reported when nothing else is). */
   dropped: string[];
 }
@@ -362,6 +364,7 @@ export function computeUpdate(local: LocalEvent, ctx: CalendarContext): UploadCo
   }
 
   // Exception rows.
+  let answersOnly = true;
   if (!ruleRemoved && shadow.recurrenceRule) {
     for (const x of local.exceptions) {
       const units = exceptionChanges(x, local, shadow, calendarId, zone, overrides, removedExceptions, ctx, lossy);
@@ -369,6 +372,7 @@ export function computeUpdate(local: LocalEvent, ctx: CalendarContext): UploadCo
         exceptionUnits.set(x.eventId, units.units);
         overridesChanged = true;
         rsvp = rsvp || units.rsvp;
+        answersOnly &&= units.rsvp && !units.others && units.units.size === 1 && units.units.has('attendees');
       }
     }
   }
@@ -377,8 +381,9 @@ export function computeUpdate(local: LocalEvent, ctx: CalendarContext): UploadCo
 
   const notifying = NOTIFYING_UNITS.some((u) => masterUnits.has(u)) || overridesChanged || attendeeOthers;
   const sendSchedulingMessages = sendsSchedulingMessages(shadow, { kind: 'update', notifying, rsvp, addsAttendees: attendeeOthers }, ctx);
+  const rsvpOnly = rsvp && answersOnly && !attendeeOthers && [...masterUnits].every((u) => u.startsWith('attendee:'));
 
-  return { patch, masterUnits, exceptionUnits, removedExceptions, sendSchedulingMessages, dropped };
+  return { patch, masterUnits, exceptionUnits, removedExceptions, sendSchedulingMessages, dropped, rsvpOnly };
 }
 
 /** Timing properties that differ from the server's. */
@@ -413,7 +418,7 @@ function exceptionChanges(
   removed: Set<number>,
   ctx: CalendarContext,
   lossy: boolean,
-): { units: Set<string>; rsvp: boolean } {
+): { units: Set<string>; rsvp: boolean; others?: boolean } {
   const units = new Set<string>();
   const key = x.recurrenceId;
   if (!key) return { units, rsvp: false };
@@ -439,6 +444,7 @@ function exceptionChanges(
   const cur = sideOfRow(x);
   const values: Record<string, unknown> = {};
   let rsvp = false;
+  let others = false;
   const organizer = userIsOrganizer(shadow, ctx);
 
   for (const unit of EXCEPTION_COLUMN_UNITS) {
@@ -504,6 +510,7 @@ function exceptionChanges(
     if (result.changes.length) {
       values.participants = result.participants;
       rsvp = result.rsvp;
+      others = result.others;
       units.add('attendees');
     }
   }
@@ -517,12 +524,12 @@ function exceptionChanges(
 
   if (existing) {
     if (units.size) work.props.set(key, { ...(work.props.get(key) ?? {}), ...values });
-    return { units, rsvp };
+    return { units, rsvp, others };
   }
   // A new override: nothing but its pinned time is still an override (an app saving the instance unchanged).
   if (!units.size) units.add('new');
   work.whole.set(key, newOverride(shadow, key, values));
-  return { units, rsvp };
+  return { units, rsvp, others };
 }
 
 /** Units a new exception row inherits from its series when it leaves them empty. */
