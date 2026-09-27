@@ -134,7 +134,6 @@ export interface LocalContact {
   version: number;
   dirty: boolean;
   deleted: boolean;
-  readOnly: boolean;
   /** SYNC1: collection keys. */
   collections: string[];
   /** SYNC2: the last server card, photos reduced to hashes. */

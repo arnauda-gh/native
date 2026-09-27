@@ -205,11 +205,20 @@ function updatePatch(local: LocalContact, ctx: Ctx): PatchObject {
 
 const group = (local: LocalContact, ops: ProviderOp[]): OpGroup => ({ ref: local.sourceId ?? `row:${local.rawContactId}`, ops });
 
+/**
+ * Whether the card's address books take no writes now. Asked of the server's
+ * rights, not of RAW_CONTACT_IS_READ_ONLY on the device, which the providers
+ * never return (and which lags when only the rights changed).
+ */
+function readOnlyOnServer(local: LocalContact, ctx: Ctx): boolean {
+  return !!local.shadow && ctx.isReadOnly(withoutMemberOf(local.shadow));
+}
+
 function deletedPlan(local: LocalContact, ctx: Ctx): UploadPlan<ContactCardWire> {
   const purge = (): OpGroup => group(local, [deleteWhereId('raw_contacts', local.rawContactId)]);
   const ref = parseObjectRef(local.sourceId);
   if (ref) {
-    if (local.readOnly) return { kind: 'revert', ops: purge(), refetch: true };
+    if (readOnlyOnServer(local, ctx)) return { kind: 'revert', ops: purge(), refetch: true };
     const books = Object.entries(local.shadow?.addressBookIds ?? {}).filter(([, on]) => on).map(([id]) => id);
     const selected = books.filter((id) => ctx.isSelected(collectionKey(ref.accountId, id)));
     // A card that is also in books this device does not sync only leaves the synced ones.
@@ -245,7 +254,7 @@ export function planContactUpload(local: LocalContact, ctx: Ctx): UploadPlan<Con
   }
 
   if (!local.shadow) return { kind: 'skip', reason: 'noShadow' };
-  if (local.readOnly) {
+  if (readOnlyOnServer(local, ctx)) {
     const write = cleanWrite(local, local.shadow, ctx, { assertDirty: null, clearDirty: true });
     return { kind: 'revert', ops: group(local, write.ops.length ? write.ops : [assertContact(local, null)]) };
   }

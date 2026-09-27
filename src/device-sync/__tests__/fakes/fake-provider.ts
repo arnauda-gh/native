@@ -106,6 +106,11 @@ const COLUMNS: Record<ProviderTable, Set<string>> = {
   colors: new Set(Object.values(Colors)),
 };
 
+/** Columns the providers take on writes but refuse in every projection and selection ("Invalid column"). */
+const WRITE_ONLY_COLUMNS: Partial<Record<ProviderTable, Set<string>>> = {
+  raw_contacts: new Set([RawContacts.RAW_CONTACT_IS_READ_ONLY]),
+};
+
 /** Columns only the provider computes; writes to them are refused like SQLite would for a view. */
 const READ_ONLY_COLUMNS: Partial<Record<ProviderTable, Set<string>>> = {
   data: new Set([GroupMembership.GROUP_SOURCE_ID]),
@@ -557,6 +562,7 @@ function tablesFor(authority: Authority): readonly ProviderTable[] {
 function checkColumns(table: ProviderTable, columns: Iterable<string>, write: boolean): void {
   for (const c of columns) {
     if (!COLUMNS[table].has(c)) throw new FakeProviderError('provider', `no such column: ${c} in ${table}`);
+    if (!write && WRITE_ONLY_COLUMNS[table]?.has(c)) throw new FakeProviderError('provider', `Invalid column ${c}`);
     if (write && READ_ONLY_COLUMNS[table]?.has(c)) throw new FakeProviderError('provider', `${c} is read-only in ${table}`);
   }
 }

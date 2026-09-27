@@ -97,7 +97,7 @@ function membershipOps(local: LocalContact | null, card: ContactCardWire, ctx: T
 }
 
 export const toyContactsPlanner: ContactsPlanner = {
-  rawContactColumns: ['_id', 'sourceid', 'version', 'dirty', 'deleted', 'sync1', 'sync2', 'sync3', 'sync4', 'raw_contact_is_read_only'],
+  rawContactColumns: ['_id', 'sourceid', 'version', 'dirty', 'deleted', 'sync1', 'sync2', 'sync3', 'sync4'],
   dataColumns: ['_id', 'raw_contact_id', 'mimetype', 'data1', 'data_sync1', 'data_sync3', 'group_sourceid'],
   groupColumns: ['_id', 'sourceid', 'version', 'dirty', 'deleted', 'title', 'sync2', 'sync3', 'sync4'],
 
@@ -108,7 +108,6 @@ export const toyContactsPlanner: ContactsPlanner = {
       version: num(rc.version),
       dirty: flag(rc.dirty),
       deleted: flag(rc.deleted),
-      readOnly: flag(rc.raw_contact_is_read_only),
       collections: (str(rc.sync1) ?? '').split(',').filter(Boolean),
       shadow: parseJsonColumn<ContactCardWire>(rc.sync2),
       pending: parseJsonColumn(rc.sync3),
@@ -207,7 +206,7 @@ export const toyContactsPlanner: ContactsPlanner = {
       stillDirty = true;
     }
     ops.push(...membershipOps(local, card, ctx, local.rawContactId));
-    const shadowSame = deepEqual(local.shadow, card) && local.collections.join(',') === raw.sync1 && local.readOnly === !!raw.raw_contact_is_read_only;
+    const shadowSame = deepEqual(local.shadow, card) && local.collections.join(',') === raw.sync1;
     if (!shadowSame) ops.push({ op: 'update', table: 'raw_contacts', id: local.rawContactId, values: raw });
     const writes = ops.length - 1;
     return { ops: { ref, ops }, conflicts, stillDirty, effect: writes > 0 ? 'update' : 'none', writes };
@@ -263,7 +262,7 @@ export const toyContactsPlanner: ContactsPlanner = {
         actions: [{ kind: 'create', uid: local.pending.uid, collectionId: target.id, object: { uid: local.pending.uid, name: { full: value } } }],
       };
     }
-    if (local.readOnly) {
+    if (local.shadow && ctx.isReadOnly(local.shadow)) {
       const shadowName = nameOf(local.shadow);
       return {
         kind: 'revert',

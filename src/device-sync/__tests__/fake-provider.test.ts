@@ -441,6 +441,19 @@ describe('FakeDeviceProviders: the native bridge rules', () => {
     expect(fake.readSyncState(ME, CONTACTS_AUTHORITY)).toBeNull();
   });
 
+  it('takes raw_contact_is_read_only on writes but refuses it in projections and selections', async () => {
+    const fake = new FakeDeviceProviders();
+    const port = fake.port(ME, CONTACTS_AUTHORITY);
+    const res = await port.applyBatch([{ op: 'insert', table: 'raw_contacts', values: { [RawContacts.RAW_CONTACT_IS_READ_ONLY]: 1 } }]);
+    expect(res.ok).toBe(true);
+    await expect(port.query({ table: 'raw_contacts', columns: [RawContacts.RAW_CONTACT_IS_READ_ONLY] })).rejects.toMatchObject({
+      code: 'provider',
+    });
+    await expect(
+      port.query({ table: 'raw_contacts', columns: [RawContacts._ID], where: `${RawContacts.RAW_CONTACT_IS_READ_ONLY} = 1` }),
+    ).rejects.toMatchObject({ code: 'provider' });
+  });
+
   it('returns no id for a settings insert, which cannot be addressed by id either', async () => {
     const fake = new FakeDeviceProviders();
     const port = fake.port(ME, CONTACTS_AUTHORITY);

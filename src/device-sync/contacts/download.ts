@@ -50,11 +50,11 @@ function changedRawColumns(local: LocalContact, values: WriteRow): WriteRow {
     [RawContacts.SYNC2]: local.shadow ? JSON.stringify(local.shadow) : null,
     [RawContacts.SYNC3]: local.pending ? JSON.stringify(local.pending) : null,
     [RawContacts.SYNC4]: local.poison ? JSON.stringify(local.poison) : null,
-    [RawContacts.RAW_CONTACT_IS_READ_ONLY]: local.readOnly ? 1 : 0,
     [RawContacts.DIRTY]: local.dirty ? 1 : 0,
   };
   const out: WriteRow = {};
   for (const [column, value] of Object.entries(values)) {
+    if (column === RawContacts.RAW_CONTACT_IS_READ_ONLY) continue;
     if (column === RawContacts.SYNC2) {
       const before = local.shadow ? canonicalJson(local.shadow) : null;
       const after = typeof value === 'string' ? canonicalJson(JSON.parse(value)) : null;
@@ -62,6 +62,11 @@ function changedRawColumns(local: LocalContact, values: WriteRow): WriteRow {
     } else if (!sameCell(current[column], value as unknown)) {
       out[column] = value;
     }
+  }
+  // The providers never return the read-only flag, so it can't be compared:
+  // it goes along whenever the raw contact is written anyway.
+  if (Object.keys(out).length && RawContacts.RAW_CONTACT_IS_READ_ONLY in values) {
+    out[RawContacts.RAW_CONTACT_IS_READ_ONLY] = values[RawContacts.RAW_CONTACT_IS_READ_ONLY];
   }
   return out;
 }

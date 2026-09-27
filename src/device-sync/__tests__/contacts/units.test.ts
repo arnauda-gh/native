@@ -12,8 +12,10 @@ import { JPEG } from './fixtures';
 describe('contacts decode', () => {
   it('queries the columns the planner reads', () => {
     expect(contactsPlanner.rawContactColumns).toEqual(expect.arrayContaining([
-      '_id', 'sourceid', 'version', 'dirty', 'deleted', 'sync1', 'sync2', 'sync3', 'sync4', 'raw_contact_is_read_only',
+      '_id', 'sourceid', 'version', 'dirty', 'deleted', 'sync1', 'sync2', 'sync3', 'sync4',
     ]));
+    // The providers refuse it in every projection ("Invalid column"): it is only written.
+    expect(contactsPlanner.rawContactColumns).not.toContain('raw_contact_is_read_only');
     expect(contactsPlanner.dataColumns).toEqual(expect.arrayContaining([
       '_id', 'raw_contact_id', 'mimetype', 'is_primary', 'data1', 'data14', 'data_sync1', 'data_sync2', 'data_sync3', 'group_sourceid',
     ]));
@@ -23,14 +25,14 @@ describe('contacts decode', () => {
 
   it('reads numbers given as text (data columns are TEXT) and tolerates what other apps left in sync columns', () => {
     const local = contactsPlanner.decodeContact(
-      { _id: '5', sourceid: 'c/e1', version: '3', dirty: '1', deleted: null, sync1: 'c/b,garbage,,c/x', sync2: '{"not":"a card"}', sync3: '{"uid":1}', sync4: 'nope', raw_contact_is_read_only: 0 },
+      { _id: '5', sourceid: 'c/e1', version: '3', dirty: '1', deleted: null, sync1: 'c/b,garbage,,c/x', sync2: '{"not":"a card"}', sync3: '{"uid":1}', sync4: 'nope' },
       [
         { _id: '9', raw_contact_id: '5', mimetype: MimeType.EMAIL, data1: 'a@b', data2: '2', data_sync1: 'emails:e1', data_sync2: '', data_sync3: '[1]' },
         { _id: 10, raw_contact_id: 6, mimetype: MimeType.NOTE, data1: 'another contact' },
       ],
     );
     expect(local).toMatchObject({
-      rawContactId: 5, sourceId: 'c/e1', version: 3, dirty: true, deleted: false, readOnly: false,
+      rawContactId: 5, sourceId: 'c/e1', version: 3, dirty: true, deleted: false,
       collections: ['c/b', 'c/x'], shadow: null, pending: null, poison: null,
     });
     expect(local.rows).toEqual([{ id: 9, mimetype: MimeType.EMAIL, cells: { data1: 'a@b', data2: '2' }, key: 'emails:e1', photoHash: null, baseline: null }]);

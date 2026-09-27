@@ -17,9 +17,13 @@ const DATA_CELLS = [
   GroupMembership.GROUP_SOURCE_ID,
 ];
 
+/**
+ * RAW_CONTACT_IS_READ_ONLY is not among them: the providers take it on
+ * writes but refuse it in every projection ("Invalid column").
+ */
 export const RAW_CONTACT_COLUMNS: readonly string[] = [
   RawContacts._ID, RawContacts.SOURCE_ID, RawContacts.VERSION, RawContacts.DIRTY, RawContacts.DELETED,
-  RawContacts.SYNC1, RawContacts.SYNC2, RawContacts.SYNC3, RawContacts.SYNC4, RawContacts.RAW_CONTACT_IS_READ_ONLY,
+  RawContacts.SYNC1, RawContacts.SYNC2, RawContacts.SYNC3, RawContacts.SYNC4,
 ];
 
 export const DATA_COLUMNS: readonly string[] = [
@@ -89,7 +93,6 @@ export function decodeContact(rawContact: Row, data: Row[]): LocalContact {
     version: num(rawContact[RawContacts.VERSION]) ?? 0,
     dirty: flag(rawContact[RawContacts.DIRTY]),
     deleted: flag(rawContact[RawContacts.DELETED]),
-    readOnly: flag(rawContact[RawContacts.RAW_CONTACT_IS_READ_ONLY]),
     collections,
     shadow: decodeShadow(rawContact[RawContacts.SYNC2]),
     pending: decodePending(rawContact[RawContacts.SYNC3]),
