@@ -309,6 +309,36 @@ describe('contacts upload: deleted contacts', () => {
     expect(await patchOf(h, rawId)).toEqual({ [`addressBookIds/${h.book}`]: null });
   });
 
+  it('only leaves the synced book when the server filed the card in an unsynced one after the device deleted it', async () => {
+    const h = new Harness();
+    const archive = h.server.addAddressBook(JMAP, { name: 'Archive' });
+    h.unselected.add(`${JMAP}/${archive}`);
+    const { id, rawId } = await h.seed(appleCard());
+    h.device.user.deleteContact(rawId);
+    h.server.serverUpdate('ContactCard', JMAP, id, { [`addressBookIds/${archive}`]: true, 'emails/k1/address': 'new@example.com' });
+    const rows = JSON.stringify(h.device.rows('data', 'raw_contact_id = ?', [rawId]));
+    await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+    // The delete wins over the server's edit: the rows stay as they were, only the shadow follows.
+    expect(JSON.stringify(h.device.rows('data', 'raw_contact_id = ?', [rawId]))).toBe(rows);
+    expect(await uploadPlan(h, rawId)).toEqual({ kind: 'upload', actions: [{ kind: 'update', id, patch: { [`addressBookIds/${h.book}`]: null } }] });
+    await h.upload(rawId);
+    expect(h.server.get('ContactCard', JMAP, id)).toMatchObject({ addressBookIds: { [archive]: true } });
+    expect(h.device.row('raw_contacts', rawId)).toBeUndefined();
+  });
+
+  it('deletes its own create by id once the download found it, not by a uid lookup', async () => {
+    const h = new Harness();
+    const rawId = h.device.user.insertContact(ACCOUNT, [{ [Data.MIMETYPE]: MimeType.NOTE, data1: 'y' }]);
+    const plan = await h.planUpload(rawId);
+    if (plan.kind !== 'upload') throw new Error(plan.kind);
+    // The create went through but its response was lost; then the user deleted the contact.
+    const id = h.send(plan.actions)!;
+    h.device.user.deleteContact(rawId);
+    await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+    expect(await h.contact(rawId)).toMatchObject({ sourceId: `${JMAP}/${id}`, pending: null, deleted: true });
+    expect(await uploadPlan(h, rawId)).toEqual({ kind: 'upload', actions: [{ kind: 'destroy', id, uid: h.card(id).uid }] });
+  });
+
   it('purges a new contact that never reached the server, and destroys a claimed one by uid', async () => {
     const h = new Harness();
     const fresh = h.device.user.insertContact(ACCOUNT, [{ [Data.MIMETYPE]: MimeType.NOTE, data1: 'x' }]);

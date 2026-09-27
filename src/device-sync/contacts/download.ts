@@ -288,8 +288,19 @@ export function planContactDownload(card: ContactCardWire, local: LocalContact |
   const identity = objectRef(ctx.jmapAccountId, server.id);
   if (!local) return insertPlan(server, ctx);
   const none = (stillDirty: boolean): DownloadPlan => ({ ops: { ref: identity, ops: [] }, conflicts: 0, stillDirty, effect: 'none', writes: 0 });
-  // Deleted on the device: the delete wins and uploads as a destroy.
-  if (local.deleted) return none(true);
+  if (local.deleted) {
+    // Deleted on the device: the delete wins over a server edit, so the rows stay as they are.
+    // Only the shadow (and an identity never written) follows the card: the deletion uploads
+    // against the card as it is now, which may also sit in books this device does not sync.
+    const shadow = withMemberOf(shadowOf(server), shadowMemberOf(local.shadow));
+    const raw = changedRawColumns(local, {
+      ...(local.sourceId ? {} : { [RawContacts.SOURCE_ID]: identity, [RawContacts.SYNC3]: null }),
+      [RawContacts.SYNC2]: JSON.stringify(shadow),
+    });
+    if (!Object.keys(raw).length) return none(true);
+    const ops = [assertContact(local, local.dirty), updateRawContact(local.rawContactId, raw)];
+    return { ops: { ref: identity, ops }, conflicts: 0, stillDirty: true, effect: 'update', writes: 1 };
+  }
 
   if (!local.sourceId) {
     // Our own create whose identity was never written: adopt it. The rows stay

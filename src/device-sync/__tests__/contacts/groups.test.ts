@@ -183,6 +183,21 @@ describe('contacts groups: device edits of groups', () => {
     });
   });
 
+  it('only leaves the synced book when the server filed the group in an unsynced one after the device deleted it', async () => {
+    const { h, gid } = await withGroup();
+    const archive = h.server.addAddressBook(JMAP, { name: 'Archive' });
+    h.unselected.add(`${JMAP}/${archive}`);
+    h.device.user.deleteGroup((await localGroup(h, gid)).groupId);
+    h.server.serverUpdate('ContactCard', JMAP, gid, { [`addressBookIds/${archive}`]: true, 'name/full': 'Old friends' });
+    const plan = h.planner.planGroupDownload(h.card(gid), await localGroup(h, gid), h.ctx);
+    await h.applyOk(plan.ops);
+    // The delete wins over the rename; only the shadow follows the card.
+    expect(await localGroup(h, gid)).toMatchObject({ deleted: true, title: 'Friends' });
+    expect(h.planner.planGroupUpload(await localGroup(h, gid), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id: gid, patch: { [`addressBookIds/${h.book}`]: null } }],
+    });
+  });
+
   it('reverts a rename of a read-only group', async () => {
     const { h, gid } = await withGroup();
     h.readOnlyBooks.add(h.book);

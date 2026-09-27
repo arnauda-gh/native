@@ -94,7 +94,13 @@ export function planGroupDownload(card: ContactCardWire, local: LocalGroup | nul
       values: { [Groups.SOURCE_ID]: identity, [Groups.TITLE]: remoteTitle ?? '', [Groups.GROUP_VISIBLE]: 1, [Groups.DIRTY]: 0, ...cardColumns(card, ctx) },
     }], 'insert');
   }
-  if (local.deleted) return plan([], 'none', 0, true);
+  if (local.deleted) {
+    // Deleted on the device: the delete wins over a server edit. Only the shadow (and an identity
+    // never written) follows the card, so the deletion uploads against the card as it is now.
+    const diff = changed(local, { ...(local.sourceId ? {} : { [Groups.SOURCE_ID]: identity, [Groups.SYNC3]: null }), ...cardColumns(card, ctx) });
+    if (!Object.keys(diff).length) return plan([], 'none', 0, true);
+    return plan([assertGroup(local, local.dirty), updateGroup(local, diff)], 'update', 0, true);
+  }
   if (!local.sourceId) {
     // Our own create whose identity was never written.
     return plan([

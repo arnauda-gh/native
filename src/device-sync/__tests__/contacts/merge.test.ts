@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Data, MimeType } from '../../android-columns';
+import { Data, MimeType, RawContacts } from '../../android-columns';
 import type { ContactCardWire } from '../../planner';
 import { appleCard, googleCard } from './fixtures';
 import { Harness, JMAP } from './harness';
@@ -139,13 +139,20 @@ describe('contacts merge: a dirty contact meets a new server version', () => {
     expect(typeof patch === 'object' && Object.keys(patch).some((k) => k.startsWith('nicknames'))).toBe(false);
   });
 
-  it('leaves a contact deleted on the device alone: the delete wins and uploads', async () => {
+  it('leaves the rows of a contact deleted on the device alone: the delete wins and uploads', async () => {
     const h = new Harness();
     const { id, rawId } = await h.seed(appleCard());
     h.device.user.deleteContact(rawId);
     h.server.serverUpdate('ContactCard', JMAP, id, { 'emails/k1/address': 'x@example.com' });
     const plan = h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx);
-    expect(plan).toMatchObject({ effect: 'none', stillDirty: true, ops: { ops: [] } });
+    // Only the shadow follows the card, for the deletion's upload.
+    expect(plan).toMatchObject({ effect: 'update', stillDirty: true, conflicts: 0 });
+    expect(plan.ops.ops.filter((o) => o.op !== 'assert')).toEqual([{
+      op: 'update', table: 'raw_contacts', id: rawId, expectCount: 1,
+      values: { [RawContacts.SYNC2]: expect.any(String) },
+    }]);
+    await h.applyOk(plan.ops);
+    expect(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx)).toMatchObject({ effect: 'none', ops: { ops: [] } });
     expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toMatchObject({ kind: 'upload', actions: [{ kind: 'destroy', id }] });
   });
 
