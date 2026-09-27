@@ -99,7 +99,7 @@ describe('contacts download: golden rows', () => {
     expect(Object.keys(rows).some((k) => k.startsWith('onlineServices'))).toBe(false);
   });
 
-  it('maps a Google card: custom display name, legacy cell phone, labelled link, department list, relation by name', async () => {
+  it('maps a Google card: custom display name, legacy cell phone, profile link, department list, relation by name', async () => {
     const h = new Harness();
     const { rawId } = await h.seed(googleCard());
     const rows = h.rowsByKey(rawId);
@@ -110,7 +110,8 @@ describe('contacts download: golden rows', () => {
     expect(cells(rows['nicknames:k1'], ['data1'])).toEqual({ data1: 'Gü' });
     expect(cells(rows['nicknames:k2'], ['data1'])).toEqual({ data1: 'GKG' });
     expect(cells(rows['phones:k1'], TYPED)).toEqual({ data1: '0171 2345678', data2: '2', data3: null });
-    expect(cells(rows['links:k1'], TYPED)).toEqual({ data1: 'https://example.org/~guenther', data2: '0', data3: 'profile' });
+    // The label names a type Android has.
+    expect(cells(rows['links:k1'], TYPED)).toEqual({ data1: 'https://example.org/~guenther', data2: '3', data3: null });
     expect(cells(rows['organizations:k1|titles:k1,'], ORG)).toEqual({ data1: 'Uni Beispiel', data4: 'Professor', data5: 'Informatik, AG Sync', data6: null });
     expect(cells(rows['relatedTo:Maria Groß'], TYPED)).toEqual({ data1: 'Maria Groß', data2: '14', data3: null });
     expect(cells(rows['anniversaries:k1'], TYPED)).toEqual({ data1: '--08-15', data2: '1', data3: null });

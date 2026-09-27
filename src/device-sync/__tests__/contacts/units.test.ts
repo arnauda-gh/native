@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { Data, MimeType, PhoneType, RelationType } from '../../android-columns';
+import { Data, EmailType, MimeType, PhoneType, RelationType, WebsiteType } from '../../android-columns';
 import { contactsPlanner } from '../../contacts/planner';
 import { entryKey, orgKey, parseEntryKey, parseOrgKey } from '../../contacts/keys';
 import { editPostalComponents, postalCells, resplitPostal } from '../../contacts/postal';
 import { base64ToBytes, dataUriBase64, shadowOf } from '../../contacts/photo';
 import { fullIsDerived, nameCells } from '../../contacts/name';
-import { phoneFlags, phoneType, relationName, relationType } from '../../contacts/types-map';
+import { emailType, phoneFlags, phoneType, relationName, relationType, websiteType } from '../../contacts/types-map';
 import type { ContactCardWire } from '../../planner';
 import { JPEG } from './fixtures';
 
@@ -92,6 +92,17 @@ describe('contacts type tables', () => {
     expect(phoneFlags(PhoneType.OTHER, null)).toEqual({ contexts: [], features: [], label: null });
     expect(phoneFlags(PhoneType.FAX_WORK, null)).toEqual({ contexts: ['work'], features: ['fax'], label: null });
     expect(phoneFlags(PhoneType.CAR, null)).toEqual({ contexts: [], features: ['voice'], label: 'car' });
+  });
+
+  it('reads back the types RFC 9553 lacks from the label they upload with', () => {
+    expect(phoneType({ features: { 'main-number': true }, contexts: { work: true } }).type).toBe(PhoneType.COMPANY_MAIN);
+    expect(phoneType({ features: { voice: true }, label: 'car' })).toEqual({ type: PhoneType.CAR, label: null });
+    expect(phoneType({ features: { text: true }, label: 'mms' })).toEqual({ type: PhoneType.MMS, label: null });
+    // A custom label uploads without the feature, so it stays custom; a lone `text` is no MMS.
+    expect(phoneType({ label: 'car' })).toEqual({ type: PhoneType.CUSTOM, label: 'car' });
+    expect(phoneType({ features: { text: true } }).type).toBe(PhoneType.OTHER);
+    expect(emailType({ label: 'mobile' })).toEqual({ type: EmailType.MOBILE, label: null });
+    expect(websiteType({ label: 'blog', contexts: { work: true } })).toEqual({ type: WebsiteType.BLOG, label: null });
   });
 
   it('maps relations both ways, device-only types to the nearest RFC type', () => {

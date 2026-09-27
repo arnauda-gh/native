@@ -34,9 +34,22 @@ function labelled(label: unknown, type: number, custom: number): TypeCells {
   return typeof label === 'string' && label.trim() ? { type: custom, label } : { type, label: null };
 }
 
+/**
+ * Android types RFC 9553 has no word for upload as a label naming them; that
+ * label (exactly as written) names the type again on the way back.
+ */
+function namedType(labels: Record<number, string>, label: unknown): number | null {
+  const hit = Object.entries(labels).find(([, name]) => name === label);
+  return hit ? Number(hit[0]) : null;
+}
+
 // ─── Emails ────────────────────────────────────────────
 
+const EMAIL_LABELS: Record<number, string> = { [EmailType.MOBILE]: 'mobile' };
+
 export function emailType(entry: { contexts?: unknown; label?: unknown }): TypeCells {
+  const named = namedType(EMAIL_LABELS, entry.label);
+  if (named !== null) return { type: named, label: null };
   const type = on(entry.contexts, 'private') ? EmailType.HOME : on(entry.contexts, 'work') ? EmailType.WORK : EmailType.OTHER;
   return labelled(entry.label, type, EmailType.CUSTOM);
 }
@@ -45,7 +58,7 @@ export function emailFlags(type: number | null, label: string | null): EntryFlag
   switch (type) {
     case EmailType.HOME: return { contexts: ['private'], label: null };
     case EmailType.WORK: return { contexts: ['work'], label: null };
-    case EmailType.MOBILE: return { contexts: [], label: 'mobile' };
+    case EmailType.MOBILE: return { contexts: [], label: EMAIL_LABELS[EmailType.MOBILE] };
     case EmailType.CUSTOM: return { contexts: [], label };
     default: return { contexts: [], label: null };
   }
@@ -53,10 +66,16 @@ export function emailFlags(type: number | null, label: string | null): EntryFlag
 
 // ─── Phones ────────────────────────────────────────────
 
-/** First match wins, as in the design's table; `cell` is read as `mobile`. */
+/**
+ * First match wins, as in the design's table; `cell` is read as `mobile`. A
+ * label naming a type RFC 9553 lacks, next to the feature that type uploads
+ * with, is that type (a custom "car" uploads without the feature).
+ */
 export function phoneType(entry: { features?: unknown; contexts?: unknown; label?: unknown }): TypeCells {
   const f = (n: string) => on(entry.features, n);
   const c = (n: string) => on(entry.contexts, n);
+  const named = namedType(PHONE_LABELS, entry.label);
+  if (named !== null && (phoneFlags(named, null).features ?? []).every(f)) return { type: named, label: null };
   const mobile = f('mobile') || f('cell');
   let type: number = PhoneType.OTHER;
   if (mobile && c('work')) type = PhoneType.WORK_MOBILE;
@@ -67,6 +86,7 @@ export function phoneType(entry: { features?: unknown; contexts?: unknown; label
   else if (f('pager') && c('work')) type = PhoneType.WORK_PAGER;
   else if (f('pager')) type = PhoneType.PAGER;
   else if (f('textphone')) type = PhoneType.TTY_TDD;
+  else if (f('main-number') && c('work')) type = PhoneType.COMPANY_MAIN;
   else if (f('main-number')) type = PhoneType.MAIN;
   else if (c('work')) type = PhoneType.WORK;
   else if (c('private')) type = PhoneType.HOME;
@@ -83,6 +103,7 @@ const PHONE_LABELS: Record<number, string> = {
   [PhoneType.RADIO]: 'radio',
   [PhoneType.TELEX]: 'telex',
   [PhoneType.ASSISTANT]: 'assistant',
+  [PhoneType.MMS]: 'mms',
 };
 
 export function phoneFlags(type: number | null, label: string | null): EntryFlags {
@@ -99,7 +120,7 @@ export function phoneFlags(type: number | null, label: string | null): EntryFlag
     case PhoneType.COMPANY_MAIN: return { contexts: ['work'], features: ['main-number'], label: null };
     case PhoneType.WORK: return { contexts: ['work'], features: ['voice'], label: null };
     case PhoneType.HOME: return { contexts: ['private'], features: ['voice'], label: null };
-    case PhoneType.MMS: return { contexts: [], features: ['text'], label: null };
+    case PhoneType.MMS: return { contexts: [], features: ['text'], label: PHONE_LABELS[PhoneType.MMS] };
     case PhoneType.CUSTOM: return { contexts: [], features: [], label };
     case null:
     case PhoneType.OTHER: return { contexts: [], features: [], label: null };
@@ -124,6 +145,8 @@ export function postalFlags(type: number | null, label: string | null): EntryFla
 }
 
 export function websiteType(entry: { contexts?: unknown; label?: unknown }): TypeCells {
+  const named = namedType(WEBSITE_LABELS, entry.label);
+  if (named !== null) return { type: named, label: null };
   const type = on(entry.contexts, 'private') ? WebsiteType.HOME : on(entry.contexts, 'work') ? WebsiteType.WORK : WebsiteType.OTHER;
   return labelled(entry.label, type, WebsiteType.CUSTOM);
 }

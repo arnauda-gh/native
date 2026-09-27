@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Data, MimeType } from '../../android-columns';
+import { Data, EmailType, MimeType, PhoneType, WebsiteType } from '../../android-columns';
 import { deepEqual } from '../../common/json';
 import { applyPatch, assertPatchWellFormed, type PatchObject } from '../../common/patch';
 import type { ContactCardWire } from '../../planner';
@@ -105,6 +105,42 @@ describe('contacts upload: one edited field, one pointer', () => {
     const { rawId } = await h.seed(probeCard());
     h.device.user.updateData(h.rowsByKey(rawId)['anniversaries:bday']._id as number, { data1: 'next spring' });
     expect(h.planner.planUpload(await h.contact(rawId), h.ctx).kind).toBe('clean');
+  });
+});
+
+describe('contacts upload: every device type comes back as the device wrote it', () => {
+  const cases = (types: Record<string, number>, custom: number) =>
+    Object.entries(types).map(([name, type]) => [name, type, type === custom ? 'Boat' : null] as const);
+  const kinds = [
+    { mimetype: MimeType.PHONE, value: '+49 30 1', map: 'phones', entry: { number: '+49 30 1', features: { voice: true } }, types: cases(PhoneType, PhoneType.CUSTOM) },
+    { mimetype: MimeType.EMAIL, value: 'typed@example.org', map: 'emails', entry: { address: 'typed@example.org' }, types: cases(EmailType, EmailType.CUSTOM) },
+    { mimetype: MimeType.WEBSITE, value: 'https://typed.example', map: 'links', entry: { uri: 'https://typed.example' }, types: cases(WebsiteType, WebsiteType.CUSTOM) },
+  ];
+  const typeOf = (row: Row) => [Number(row.data2), row.data3 ?? null];
+
+  describe.each(kinds)('$map', ({ mimetype, value, map, entry, types }) => {
+    it.each(types)('%s, on a contact created on the device', async (_name, type, label) => {
+      const h = new Harness();
+      const rawId = h.device.user.insertContact('usera@example.org', [
+        { [Data.MIMETYPE]: MimeType.STRUCTURED_NAME, data1: 'Typed Person', data2: 'Typed', data3: 'Person' },
+        { [Data.MIMETYPE]: mimetype, data1: value, data2: type, data3: label },
+      ]);
+      await h.upload(rawId);
+      const [row] = h.device.rows('data', 'raw_contact_id = ? AND mimetype = ?', [rawId, mimetype]);
+      expect(typeOf(row)).toEqual([type, label]);
+      const local = await h.contact(rawId);
+      expect(local.dirty).toBe(false);
+      expect(h.planner.planDownload(h.card(h.cardIdOf(local)), local, h.ctx).effect).toBe('none');
+    });
+
+    it.each(types)('%s, chosen on the device for a synced entry', async (_name, type, label) => {
+      const h = new Harness();
+      const { id, rawId } = await h.seed({ name: { full: 'Typed Person' }, [map]: { e1: entry } });
+      h.device.user.updateData(h.rowsByKey(rawId)[`${map}:e1`]._id as number, { data2: type, data3: label });
+      await h.upload(rawId);
+      expect(typeOf(h.rowsByKey(rawId)[`${map}:e1`])).toEqual([type, label]);
+      expect(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).effect).toBe('none');
+    });
   });
 });
 
