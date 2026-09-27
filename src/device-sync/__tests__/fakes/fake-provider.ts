@@ -45,6 +45,9 @@
  * Pure TypeScript, for vitest only.
  */
 import {
+  AttendeeRelationship,
+  AttendeeStatus,
+  AttendeeType,
   Attendees,
   Calendars,
   Colors,
@@ -1448,4 +1451,47 @@ export class FakeUser {
     for (const a of attendees) this.fake.table('attendees').set(this.fake.allocId(), { ...a, event_id: eventId });
     this.setReminders(eventId, reminders);
   }
+
+  /**
+   * Etar's move to another calendar (EditEventHelper.saveEvent → moveEventToCalendar): a copy of the
+   * event from its editor model is inserted there, then the event is deleted. The model leaves the
+   * owner's own attendee row out (EditEventFragment: ATTENDEE_EMAIL equal to the calendar's
+   * OWNER_ACCOUNT, ignoring case), so the copy gets every other attendee as a required attendee
+   * without a status, and, when the owner had no row, the owner as its organizer. The reminders are
+   * copied. (Exceptions Etar never synced, which it moves too on API 30+, are not modelled.)
+   */
+  etarMove(eventId: number, calendarId: number, changes: Row = {}): number {
+    const old = this.event(eventId);
+    const owner = String(this.fake.table('calendars').get(Number(old[Events.CALENDAR_ID]))?.[Calendars.OWNER_ACCOUNT] ?? '');
+    const isOwner = (a: StoredRow) => String(a[Attendees.ATTENDEE_EMAIL] ?? '').toLowerCase() === owner.toLowerCase();
+    const values: Row = {};
+    for (const c of ETAR_COPY) if (old[c] !== undefined) values[c] = old[c];
+    const rows = [...this.fake.table('attendees').values()].filter((a) => a.event_id === eventId);
+    const others: Row[] = rows.filter((a) => !isOwner(a)).map((a) => ({
+      [Attendees.ATTENDEE_NAME]: a[Attendees.ATTENDEE_NAME] ?? null,
+      [Attendees.ATTENDEE_EMAIL]: a[Attendees.ATTENDEE_EMAIL],
+      [Attendees.ATTENDEE_RELATIONSHIP]: AttendeeRelationship.ATTENDEE,
+      [Attendees.ATTENDEE_TYPE]: AttendeeType.REQUIRED,
+      [Attendees.ATTENDEE_STATUS]: AttendeeStatus.NONE,
+    }));
+    const organizer: Row[] = rows.some(isOwner) || !others.length ? [] : [{
+      [Attendees.ATTENDEE_EMAIL]: owner,
+      [Attendees.ATTENDEE_RELATIONSHIP]: AttendeeRelationship.ORGANIZER,
+      [Attendees.ATTENDEE_TYPE]: AttendeeType.REQUIRED,
+      [Attendees.ATTENDEE_STATUS]: AttendeeStatus.ACCEPTED,
+    }];
+    const reminders = [...this.fake.table('reminders').values()]
+      .filter((r) => r.event_id === eventId)
+      .map((r) => ({ [Reminders.MINUTES]: r[Reminders.MINUTES], [Reminders.METHOD]: r[Reminders.METHOD] }));
+    const id = this.insertEvent(calendarId, { ...values, ...changes }, { attendees: [...organizer, ...others], reminders });
+    this.deleteEvent(eventId);
+    return id;
+  }
 }
+
+/** The event columns Etar's editor model writes into the copy of an event it moves (getContentValuesFromModel). */
+const ETAR_COPY = [
+  Events.TITLE, Events.DESCRIPTION, Events.EVENT_LOCATION, Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL,
+  Events.EVENT_COLOR, Events.DTSTART, Events.DTEND, Events.DURATION, Events.EVENT_TIMEZONE, Events.ALL_DAY, Events.RRULE,
+  Events.EXDATE,
+];

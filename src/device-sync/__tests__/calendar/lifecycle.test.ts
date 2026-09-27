@@ -492,6 +492,56 @@ describe('calendar planner: pairs', () => {
     expect(calendarPlanner.planUpload({ ...after, dirty: true }, h.ctx).kind).toBe('clean');
   });
 
+  describe("Etar's move of a meeting (its copy leaves the user's own row out, or adds the user as organizer)", () => {
+    const emailsOf = (h: Harness, eventId: number) =>
+      h.fake.rows('attendees', `${Attendees.EVENT_ID} = ?`, [eventId]).map((a) => String(a[Attendees.ATTENDEE_EMAIL])).sort();
+    const person = (address: string, extra: Record<string, unknown> = {}) => ({ '@type': 'Participant', calendarAddress: `mailto:${address}`, roles: { attendee: true }, ...extra });
+    const moveToWork = { kind: 'update', id: 'e1', patch: { 'calendarIds/b': null, 'calendarIds/w': true } };
+
+    it('pairs a meeting that lists the user', async () => {
+      const participants = {
+        me: person(ME, { roles: { owner: true, attendee: true }, participationStatus: 'accepted' }),
+        bob: person('bob@example.net', { name: 'Bob', participationStatus: 'accepted' }),
+      } as CalendarEventWire['participants'];
+      const { h, id } = await synced(single({ participants, organizerCalendarAddress: `mailto:${ME}` }));
+
+      const moved = h.fake.user.etarMove(id, h.rowIds.get('w')!);
+
+      expect(emailsOf(h, moved)).toEqual(['bob@example.net']);
+      expect((await pairAndApply(h)).actions).toEqual([moveToWork]);
+      expect((await h.local('e1'))!).toMatchObject({ eventId: moved, dirty: false });
+    });
+
+    it('pairs a meeting that does not list the user', async () => {
+      const participants = {
+        boss: person('boss@example.net', { roles: { owner: true, attendee: true }, participationStatus: 'accepted' }),
+        bob: person('bob@example.net', { participationStatus: 'needs-action' }),
+      } as CalendarEventWire['participants'];
+      const { h, id } = await synced(single({ participants, organizerCalendarAddress: 'mailto:boss@example.net' }));
+
+      const moved = h.fake.user.etarMove(id, h.rowIds.get('w')!);
+
+      expect(emailsOf(h, moved)).toEqual(['bob@example.net', 'boss@example.net', ME]);
+      expect((await pairAndApply(h)).actions).toEqual([moveToWork]);
+    });
+
+    it('never pairs a copy that lost or gained someone else', async () => {
+      const participants = {
+        me: person(ME, { roles: { owner: true, attendee: true }, participationStatus: 'accepted' }),
+        bob: person('bob@example.net'),
+        carol: person('carol@example.net'),
+      } as CalendarEventWire['participants'];
+      const attendee = (email: string) => ({ [Attendees.ATTENDEE_EMAIL]: email, [Attendees.ATTENDEE_RELATIONSHIP]: 1, [Attendees.ATTENDEE_TYPE]: 1, [Attendees.ATTENDEE_STATUS]: 0 });
+      for (const copied of [['bob@example.net'], ['bob@example.net', 'carol@example.net', 'dave@example.net']]) {
+        const { h, id } = await synced(single({ participants, organizerCalendarAddress: `mailto:${ME}` }));
+        h.fake.user.deleteEvent(id);
+        h.fake.user.insertEvent(h.rowIds.get('w')!, lunchColumns, { attendees: copied.map(attendee) });
+        const events = await h.events();
+        expect(calendarPlanner.planPairs(events.filter((e) => e.deleted), events.filter((e) => !e.syncId), h.ctx), copied.join()).toEqual([]);
+      }
+    });
+  });
+
   it('keeps the timing of a series turned single against the series, so a start moved before uploads', async () => {
     const { h, id } = await synced(single({ recurrenceRule: { frequency: 'daily' } }));
     // Moved an hour later in place, then turned into a single event (Etar: delete + insert).

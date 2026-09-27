@@ -697,6 +697,47 @@ describe('device sync engine with the real planners', () => {
     expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
   });
 
+  it('keeps a meeting Etar moved the same event, without cancelling and inviting anyone again', async () => {
+    const h = real();
+    const work = h.server.addCalendar('a', { name: 'Work' });
+    const lunch = h.server.addEvent('a', {
+      uid: 'lunch-uid',
+      title: 'Lunch',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      organizerCalendarAddress: 'mailto:alice@example.com',
+      participants: {
+        me: { '@type': 'Participant', calendarAddress: 'mailto:alice@example.com', roles: { owner: true, attendee: true }, participationStatus: 'accepted' },
+        bob: { '@type': 'Participant', calendarAddress: 'mailto:bob@example.com', name: 'Bob', roles: { attendee: true, optional: true }, participationStatus: 'accepted' },
+      },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const old = h.events().find((e) => e._sync_id === `a/${lunch}`)!;
+    const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+
+    // What Etar really inserts: Bob as a required attendee without an answer, and no row for the user.
+    const moved = h.device.user.etarMove(Number(old._id), workRow);
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 1, deleted: 0 } } });
+    expect(h.server.all('CalendarEvent', 'a')).toHaveLength(1);
+    expect(h.server.get('CalendarEvent', 'a', lunch)).toMatchObject({
+      uid: 'lunch-uid',
+      calendarIds: { [work]: true },
+      participants: { bob: { roles: { attendee: true, optional: true }, participationStatus: 'accepted' } },
+    });
+    expect(h.server.scheduling).toEqual([]);
+    // The rows show the meeting as the server holds it again: the user's own row and Bob's answer.
+    const attendees = h.device.rows('attendees').filter((a) => Number(a.event_id) === moved);
+    expect(attendees.map((a) => [a[Attendees.ATTENDEE_EMAIL], a[Attendees.ATTENDEE_STATUS], a[Attendees.ATTENDEE_TYPE]]).sort()).toEqual([
+      ['alice@example.com', 1, 1],
+      ['bob@example.com', 1, 2],
+    ]);
+    expect(h.events()).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${lunch}`, dirty: 0 })]);
+  });
+
   it('uploads a series Etar turned into a single event as the removal of its rule', async () => {
     const h = real();
     const series = h.server.addEvent('a', {

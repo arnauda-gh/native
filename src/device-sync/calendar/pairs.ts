@@ -15,6 +15,7 @@ import type { CalendarEventWire } from '../wire';
 import { exceptionRef, parseObjectRef } from '../common/ids';
 import { clone } from '../common/json';
 import { applyPatch, type PatchObject } from '../common/patch';
+import { isSelfAddress, type SelfContext } from './attendees';
 import { EXCEPTION_CELLS, MASTER_CELLS, encodeBaseline, makeBaseline } from './columns';
 import { durationTextSeconds } from './duration';
 import { isExcluded, overridesOf } from './exceptions';
@@ -49,8 +50,17 @@ function lengthMs(cells: Row): number | null {
   return seconds === null ? null : seconds * 1000;
 }
 
-const attendeeSet = (row: LocalEventRow) =>
-  row.attendees.map((a) => String(a.cells[Attendees.ATTENDEE_EMAIL] ?? '').toLowerCase()).sort().join(',');
+/**
+ * The attendees' addresses, the user's own left out: Etar's copy of a meeting
+ * has no row for the user when the user was listed (its editor keeps the
+ * owner's row out of its attendee list), and one as the organizer when not.
+ */
+const attendeeSet = (row: LocalEventRow, self: SelfContext) =>
+  row.attendees
+    .map((a) => String(a.cells[Attendees.ATTENDEE_EMAIL] ?? '').toLowerCase())
+    .filter((email) => !isSelfAddress(email, self))
+    .sort()
+    .join(',');
 
 export interface PairKind {
   /** The same event in another calendar. */
@@ -60,7 +70,7 @@ export interface PairKind {
 }
 
 /** How a deleted and a new row are one edit, or null. */
-export function pairKind(deleted: LocalEvent, fresh: LocalEvent): PairKind | null {
+export function pairKind(deleted: LocalEvent, fresh: LocalEvent, self: SelfContext): PairKind | null {
   for (const c of PAIR_COLUMNS) {
     // A copy inserted without STATUS (Google Calendar) says nothing about it.
     if (c === Events.STATUS && (isUnsetStatus(deleted.cells[c]) || isUnsetStatus(fresh.cells[c]))) continue;
@@ -69,7 +79,7 @@ export function pairKind(deleted: LocalEvent, fresh: LocalEvent): PairKind | nul
   const allDay = Number(fresh.cells[Events.ALL_DAY] ?? 0) === 1;
   if (!allDay && String(deleted.cells[Events.EVENT_TIMEZONE] ?? '') !== String(fresh.cells[Events.EVENT_TIMEZONE] ?? '')) return null;
   if (lengthMs(deleted.cells) !== lengthMs(fresh.cells)) return null;
-  if (attendeeSet(deleted) !== attendeeSet(fresh)) return null;
+  if (attendeeSet(deleted, self) !== attendeeSet(fresh, self)) return null;
   const move = deleted.calendarRowId !== fresh.calendarRowId;
   const deletedRule = rruleParts(deleted.cells[Events.RRULE]);
   const freshRule = rruleParts(fresh.cells[Events.RRULE]);

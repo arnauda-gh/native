@@ -391,7 +391,7 @@ function planPairs(
     refuseTask(d.shadow);
     for (const f of fresh) {
       if (used.has(f.eventId) || f.syncId !== null || f.pending || f.deleted || isExceptionRow(f.cells) || !inAccount(f)) continue;
-      const kind = pairKind(d, f);
+      const kind = pairKind(d, f, ctx);
       if (!kind) continue;
       const pair = pairPatch(d, f, kind, ctx);
       if (!pair) continue;
