@@ -322,6 +322,12 @@ export interface DeviceSyncNativeModule {
   /** Hands the report to the waiting adapter. Resolves false for an unknown or finished run. */
   finishRun(runId: string, reportJson: string): Promise<boolean>;
   isRunCancelled(runId: string): Promise<boolean>;
+  /**
+   * Routes for the native push router: `{ [jmapAccountId]: [{ accountName,
+   * authorities }] }`, JSON. A push whose `changed` map names one of these
+   * accounts with a contact or calendar type requests those syncs.
+   */
+  setPushRoutes(routesJson: string): Promise<void>;
 
   /** `ProviderQuery` JSON in, `ProviderRows` JSON out. */
   query(name: string, authority: Authority, queryJson: string): Promise<string>;
@@ -335,6 +341,65 @@ export interface DeviceSyncNativeModule {
   addListener(eventName: string): void;
   removeListeners(count: number): void;
 }
+
+// ─── The JMAP side ─────────────────────────────────────
+
+/** A method call or response as on the wire: `[name, arguments, callId]`. */
+export type JmapInvocation = [name: string, args: Record<string, unknown>, callId: string];
+
+export interface JmapResponse {
+  methodResponses: JmapInvocation[];
+  sessionState?: string;
+}
+
+export interface JmapAccountView {
+  name: string;
+  isPersonal: boolean;
+  isReadOnly: boolean;
+  accountCapabilities: Record<string, unknown>;
+}
+
+export interface JmapSessionView {
+  username: string;
+  accounts: Record<string, JmapAccountView>;
+  primaryAccounts: Record<string, string>;
+  capabilities: Record<string, unknown>;
+}
+
+/** The core capability's limits the engine sizes its requests by. */
+export interface JmapCoreLimits {
+  maxObjectsInGet: number;
+  maxObjectsInSet: number;
+  maxCallsInRequest: number;
+  maxConcurrentRequests: number;
+  maxSizeRequest: number;
+}
+
+/**
+ * The engine's view of one registry account's JMAP server: a detached
+ * JMAPClient on the device (src/device-sync/jmap/client-port.ts), the fake
+ * server in tests. Transport failures throw an Error whose `name` is
+ * `AuthenticationError`, `NetworkError`, `RequestTimeoutError` or
+ * `RateLimitError` (with `retryAfterMs`), as jmap-client.ts does; after a
+ * `NetworkError` or `RequestTimeoutError` the server may have applied the
+ * request. Any other thrown Error (jmap-client.ts throws plain ones for a
+ * non-OK HTTP status, e.g. `JMAP request failed: 503 - …`, and for a body that
+ * is not JSON) means no usable response and counts as `io`; a 400 for a limit
+ * is an engine bug. Method-level errors come back as
+ * `['error', { type }, callId]` responses.
+ */
+export interface JmapPort {
+  session(): JmapSessionView;
+  /** The session's core limits, with the RFC 8620 fallbacks where the server gives none. */
+  limits(): JmapCoreLimits;
+  request(calls: JmapInvocation[], using: string[]): Promise<JmapResponse>;
+  /** Bytes of a blob-backed `media` entry (other servers; Stalwart keeps photos as `data:` URIs). */
+  downloadBlob(accountId: string, blobId: string, type?: string): Promise<Uint8Array>;
+}
+
+export const JMAP_CORE = 'urn:ietf:params:jmap:core';
+export const JMAP_CONTACTS = 'urn:ietf:params:jmap:contacts';
+export const JMAP_CALENDARS = 'urn:ietf:params:jmap:calendars';
 
 // ─── App-side preferences the engine reads ─────────────
 
