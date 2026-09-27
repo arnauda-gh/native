@@ -13,7 +13,14 @@ import { clearEmailDetailCache } from '../lib/email-detail-cache';
 import { clearBodyDocuments } from '../lib/email-body-document';
 import { clearBodyHeights } from '../lib/body-heights';
 import { generateAccountId } from '../lib/account-utils';
-import { runWebmailHandoff, redeemPairingCode, HandoffCancelledError, HandoffError, type HandoffResult } from '../lib/oauth';
+import {
+  runWebmailHandoff,
+  redeemPairingCode,
+  HandoffCancelledError,
+  HandoffError,
+  PairingError,
+  type HandoffResult,
+} from '../lib/oauth';
 import { discoverOAuthMetadata, loginWithPkce, probeWebmail, revokeRefreshToken } from '../lib/oauth-native';
 import {
   teardownPushNotifications,
@@ -153,8 +160,18 @@ function refetchFeatureStores(): void {
   }
 }
 
+// Pairing codes this app process has redeemed or is redeeming. Codes are
+// single-use, so a second attempt with the same one can only fail.
+const pairingCodesSeen = new Set<string>();
+
+function hostOfUrl(url: string): string {
+  return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0];
+}
+
 // Best-effort RFC 7009 revocation of an account's refresh token on sign-out.
-// A QR-paired phone shares the desktop's token, so those are left alone.
+// QR-paired bundles are left alone: webmail up to 1.11 handed the phone the
+// desktop's own refresh token, and newer ones hand out a separate grant whose
+// refresh token only the webmail's token proxy understands.
 async function revokeStoredRefreshToken(accountId: string): Promise<void> {
   try {
     const entry = useAccountStore.getState().getAccountById(accountId);
@@ -428,34 +445,70 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   loginViaPairing: async (webmailUrl, code, opts) => {
+    // A code is good for one redemption. The same link can reach us twice
+    // (a deep link re-read on launch, a double tap, a scan racing a paste);
+    // the second attempt must not spend a request only to be told "used".
+    if (pairingCodesSeen.has(code)) {
+      throw new PairingError('used', 'This pairing code was already used on this device', {
+        host: hostOfUrl(webmailUrl),
+      });
+    }
+    pairingCodesSeen.add(code);
+
     set({ isLoading: true, error: null });
-    let result;
+    let result: HandoffResult;
     try {
       result = await redeemPairingCode(webmailUrl, code);
     } catch (err) {
+      // Not redeemed here: the server is the judge of a retry (it answers
+      // "used" if the request did get through).
+      pairingCodesSeen.delete(code);
       const message = err instanceof Error ? err.message : 'Pairing failed';
       set({ isLoading: false, error: message });
       throw err;
     }
 
-    // redeemPairingCode only ever yields the OAuth flow, but guard anyway so a
-    // future server change can't silently mis-route credentials here.
-    if (result.flow !== 'oauth') {
-      set({ isLoading: false, error: 'Unexpected pairing response' });
-      throw new Error('Unexpected pairing response');
+    // The code is spent from here on. A failure to sign in with what it
+    // bought needs a new code, which the error says. Two failures keep their
+    // own error: a second factor the login screen can still ask for (servers
+    // without app passwords hand over the account password, which `login`
+    // keeps for that step), and the account limit, which a new code won't fix.
+    const serverHost = hostOfUrl(result.serverUrl);
+    const connectFailed = (err: unknown): unknown => {
+      if (err instanceof Error && (err.name === 'TotpRequiredError' || /maximum of \d+ accounts/i.test(err.message))) {
+        // `login` has settled the store already; the OAuth path has not.
+        if (get().isLoading) set({ isLoading: false, error: err.message });
+        return err;
+      }
+      const message = err instanceof AuthenticationError
+        ? 'Authentication rejected by server'
+        : err instanceof Error
+          ? err.message
+          : 'Pairing sign-in failed';
+      const wrapped = new PairingError('connect_failed', `Signed in, but connecting failed: ${message}`, {
+        host: serverHost,
+        cause: err,
+      });
+      set({ isLoading: false, error: wrapped.message });
+      return wrapped;
+    };
+
+    if (result.flow === 'password') {
+      // An app password (or, for servers without them, the account
+      // password): the normal password sign-in, which also keeps the live
+      // account when adding another one fails.
+      try {
+        await get().login(result.serverUrl, result.username, result.password, { addAccount: opts?.addAccount });
+      } catch (err) {
+        throw connectFailed(err);
+      }
+      return;
     }
 
     try {
       await completeOAuthHandoff(set, get, result, opts);
     } catch (err) {
-      const message =
-        err instanceof AuthenticationError
-          ? 'Authentication rejected by server'
-          : err instanceof Error
-            ? err.message
-            : 'Pairing sign-in failed';
-      set({ isLoading: false, error: message });
-      throw err;
+      throw connectFailed(err);
     }
   },
 
