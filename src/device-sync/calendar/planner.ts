@@ -316,6 +316,13 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
   }
   if (!keys.length) {
     if (computation.dropped.some((u) => u === 'timing' || u === 'rule')) return { kind: 'skip', reason: SKIP.ruleNotRepresentable };
+    // A move into a calendar of another JMAP account is no patch (only new rows are created across accounts):
+    // the row goes back to its calendar instead of staying there unsynced. With other changes, their accepted
+    // write puts it back.
+    if (computation.dropped.includes('calendar')) {
+      const ops = revertGroup(local, ctx);
+      if (ops) return { kind: 'revert', ops };
+    }
     return { kind: 'clean', ops: cleanGroup(local, computation) };
   }
   const action: UploadAction<CalendarEventWire> = { kind: 'update', id: ref.id, patch: computation.patch };

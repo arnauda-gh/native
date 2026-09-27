@@ -131,6 +131,41 @@ describe('calendar device edits through the engine', () => {
     expect(h.events().every((e) => Number(e[Events.DIRTY] ?? 0) === 0)).toBe(true);
   });
 
+  it('puts an event an app moved in place to a calendar of another account back into its calendar', async () => {
+    const h = real({ accounts: 'withShared' });
+    const team = String(h.server.all('Calendar', 'team')[0].id);
+    h.prefs.calendarSelection[`team/${team}`] = true;
+    const id = h.server.addEvent('a', {
+      uid: 'lunch-uid',
+      title: 'Lunch',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const calendarRow = (key: string) => Number(h.device.rows('calendars').find((c) => c._sync_id === key)!._id);
+    const row = () => h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!;
+    expect(row()[Events.CALENDAR_ID]).toBe(calendarRow(`a/${h.calendar}`));
+
+    // An app moves it by changing CALENDAR_ID in place (a move across JMAP accounts can't be a patch).
+    h.device.user.updateEvent(Number(row()._id), { [Events.CALENDAR_ID]: calendarRow(`team/${team}`) });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(row()).toMatchObject({ [Events.CALENDAR_ID]: calendarRow(`a/${h.calendar}`), [Events.DIRTY]: 0 });
+    expect(h.server.get('CalendarEvent', 'a', id)!.calendarIds).toEqual({ [h.calendar]: true });
+    expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
+    // Nothing was sent; the change counts as skipped (a report entry needs the engine to report reverts).
+    expect(report).toMatchObject({ outcome: 'ok', stats: { uploaded: { created: 0, updated: 0, deleted: 0 }, skipped: 1 } });
+
+    // Together with another edit: that one uploads, and the row goes back all the same.
+    h.device.user.updateEvent(Number(row()._id), { [Events.CALENDAR_ID]: calendarRow(`team/${team}`), [Events.TITLE]: 'Team lunch' });
+    expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', stats: { uploaded: { updated: 1 } } });
+    expect(h.server.get('CalendarEvent', 'a', id)).toMatchObject({ title: 'Team lunch', calendarIds: { [h.calendar]: true } });
+    expect(row()).toMatchObject({ [Events.CALENDAR_ID]: calendarRow(`a/${h.calendar}`), [Events.TITLE]: 'Team lunch', [Events.DIRTY]: 0 });
+    expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {
