@@ -5,7 +5,9 @@ import { useAccountStore } from '../stores/account-store';
 import { useLocaleStore } from '../stores/locale-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QrScanModal } from '../components/QrScanModal';
-import { parseQrLoginPayload } from '../lib/oauth';
+import { PasteSignInLinkModal } from '../components/PasteSignInLinkModal';
+import { parseQrLoginPayload, type QrLoginPayload } from '../lib/oauth';
+import { usePendingSignInLinkStore } from '../navigation/pending-sign-in-link';
 import {
   discoverServerForEmail,
   emailDomain,
@@ -69,6 +71,10 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
   const [searching, setSearching] = React.useState(false);
   const [busy, setBusy] = React.useState<SigningInPhase | null>(null);
   const [scannerVisible, setScannerVisible] = React.useState(false);
+  const [pasteVisible, setPasteVisible] = React.useState(false);
+  // The webmail a sign-in code is being redeemed at, for the waiting screen
+  // (in add mode the server fields still name the signed-in account's host).
+  const [pairingWebmailUrl, setPairingWebmailUrl] = React.useState<string | null>(null);
 
   // Addresses typed before on this device (last 5) plus the registry's, so a
   // returning user taps instead of retyping. Never contains passwords.
@@ -131,6 +137,10 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         setScannerVisible(false);
         return true;
       }
+      if (pasteVisible) {
+        setPasteVisible(false);
+        return true;
+      }
       if (history.length > 0) {
         goBack();
         return true;
@@ -142,7 +152,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
       return false;
     });
     return () => subscription.remove();
-  }, [busy, searching, scannerVisible, history.length, goBack, isAddMode, onCancel]);
+  }, [busy, searching, scannerVisible, pasteVisible, history.length, goBack, isAddMode, onCancel]);
 
   // ── flows ──────────────────────────────────────────────
 
@@ -160,6 +170,27 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
     [isAddMode, onLogin],
   );
 
+  // The webmail hands back the password even when the account needs a second
+  // factor (a hand-off, or a sign-in code on a server without app passwords);
+  // finish the sign-in here with a code instead of failing (the user already
+  // proved the password once). Returns whether it took over.
+  const continueWithSecondFactor = React.useCallback(
+    (err: unknown, target: string): boolean => {
+      const pending = useAuthStore.getState().pendingTotpLogin;
+      if (!(err instanceof Error && err.name === 'TotpRequiredError' && pending)) return false;
+      setEmail(pending.username);
+      setPassword(pending.password);
+      setServerUrl(pending.serverUrl);
+      setTotpRequired(true);
+      setBusy(null);
+      setNotice(describeLoginError(err, { serverUrl: target, t }));
+      setHistory((prev) => [...prev, step]);
+      setStep('password');
+      return true;
+    },
+    [step, t],
+  );
+
   const runHandoff = React.useCallback(
     async (target: string) => {
       setNotice(null);
@@ -171,27 +202,13 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         // that's a cancellation, not a failure, so leave them where they were.
         finishIfSignedIn(wasAuthenticated);
       } catch (err) {
-        // The webmail hands back the password even when the account needs a
-        // second factor; finish the sign-in here with a code instead of
-        // failing (the user already proved the password once).
-        const pending = useAuthStore.getState().pendingTotpLogin;
-        if (err instanceof Error && err.name === 'TotpRequiredError' && pending) {
-          setEmail(pending.username);
-          setPassword(pending.password);
-          setServerUrl(pending.serverUrl);
-          setTotpRequired(true);
-          setBusy(null);
-          setNotice(describeLoginError(err, { serverUrl: target, t }));
-          setHistory((prev) => [...prev, step]);
-          setStep('password');
-          return;
-        }
+        if (continueWithSecondFactor(err, target)) return;
         setNotice(describeLoginError(err, { serverUrl: target, t }));
       } finally {
         setBusy(null);
       }
     },
-    [finishIfSignedIn, isAddMode, loginViaWebmail, step, t],
+    [continueWithSecondFactor, finishIfSignedIn, isAddMode, loginViaWebmail, t],
   );
 
   const handleEmailContinue = React.useCallback(async () => {
@@ -275,17 +292,12 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
     }
   }, [email, finishIfSignedIn, isAddMode, login, password, serverInput, serverUrl, totp, totpRequired, t]);
 
-  const handleScanned = React.useCallback(
-    async (data: string) => {
+  // A sign-in code, however it arrived: scanned, pasted, or a tapped
+  // `bulwarkmail://` link.
+  const handleSignInLink = React.useCallback(
+    async (payload: QrLoginPayload) => {
       setScannerVisible(false);
-      const payload = parseQrLoginPayload(data);
-      if (!payload) {
-        setNotice({
-          title: t('login.mobile.notice_bad_qr', "That code isn't a Bulwark sign-in code"),
-          detail: t('login.mobile.notice_bad_qr_detail', 'Open Bulwark on the web, then Settings → Security → Link Mobile App to show one.'),
-        });
-        return;
-      }
+      setPasteVisible(false);
 
       if (payload.kind === 'connect') {
         // Server-bootstrap code: it carries the address, the user still
@@ -296,33 +308,79 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         return;
       }
 
-      // Cross-device pairing code: redeem it for tokens, no browser needed.
+      // Cross-device pairing code: redeem it, no browser needed.
       setNotice(null);
+      setPairingWebmailUrl(payload.webmailUrl);
       setBusy('pairing');
       const wasAuthenticated = useAuthStore.getState().isAuthenticated;
       try {
         await loginViaPairing(payload.webmailUrl, payload.code, { addAccount: isAddMode });
         finishIfSignedIn(wasAuthenticated);
       } catch (err) {
+        if (continueWithSecondFactor(err, payload.webmailUrl)) return;
+        // The error names its own host: the webmail for a failed redeem, the
+        // mail server when connecting afterwards failed.
         setNotice(describeLoginError(err, { serverUrl: payload.webmailUrl, t }));
       } finally {
         setBusy(null);
+        setPairingWebmailUrl(null);
       }
     },
-    [finishIfSignedIn, isAddMode, loginViaPairing, runHandoff, t],
+    [continueWithSecondFactor, finishIfSignedIn, isAddMode, loginViaPairing, runHandoff, t],
   );
+
+  const handleScanned = React.useCallback(
+    (data: string) => {
+      setScannerVisible(false);
+      const payload = parseQrLoginPayload(data);
+      if (!payload) {
+        setNotice({
+          title: t('login.mobile.notice_bad_qr', "That code isn't a Bulwark sign-in code"),
+          detail: t('login.mobile.notice_bad_qr_detail', 'Open Bulwark on the web, then Settings → Security → Link Mobile App to show one.'),
+        });
+        return;
+      }
+      void handleSignInLink(payload);
+    },
+    [handleSignInLink, t],
+  );
+
+  // A tapped sign-in link is parked by App until a login screen is free to
+  // run it; taking it clears it, so one link signs in once.
+  const signInLinkPending = usePendingSignInLinkStore((s) => s.payload !== null);
+  React.useEffect(() => {
+    if (!signInLinkPending || busy || searching) return;
+    const payload = usePendingSignInLinkStore.getState().take();
+    if (payload) void handleSignInLink(payload);
+  }, [busy, handleSignInLink, searching, signInLinkPending]);
 
   // ── render ─────────────────────────────────────────────
 
   if (busy) {
+    const pairing = busy === 'pairing';
     return (
       <SigningInStep
         phase={busy}
-        serverUrl={serverUrl || knownServerUrl}
-        email={email.trim() || null}
+        serverUrl={pairing ? pairingWebmailUrl : serverUrl || knownServerUrl}
+        email={pairing ? null : email.trim() || null}
       />
     );
   }
+
+  const modals = (
+    <>
+      <QrScanModal
+        visible={scannerVisible}
+        onClose={() => setScannerVisible(false)}
+        onScanned={handleScanned}
+      />
+      <PasteSignInLinkModal
+        visible={pasteVisible}
+        onClose={() => setPasteVisible(false)}
+        onSubmit={(payload) => void handleSignInLink(payload)}
+      />
+    </>
+  );
 
   const canGoBack = history.length > 0;
   const shellProps = {
@@ -344,6 +402,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
             knownServerUrl={isAddMode ? knownServerUrl : null}
             notice={chooseNotice}
             onScan={() => setScannerVisible(true)}
+            onPaste={() => setPasteVisible(true)}
             onUseEmail={() => goTo('email')}
             onUseKnownServer={() => {
               if (!knownServerUrl) return;
@@ -358,11 +417,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
             }}
           />
         </LoginShell>
-        <QrScanModal
-          visible={scannerVisible}
-          onClose={() => setScannerVisible(false)}
-          onScanned={(data) => void handleScanned(data)}
-        />
+        {modals}
       </>
     );
   }
@@ -398,6 +453,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
             }}
             onSubmit={handleServerContinue}
             onScan={() => setScannerVisible(true)}
+            onPaste={() => setPasteVisible(true)}
             failedDomain={failedDomain}
             notice={notice}
           />
@@ -442,11 +498,7 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
         ) : null}
       </LoginShell>
 
-      <QrScanModal
-        visible={scannerVisible}
-        onClose={() => setScannerVisible(false)}
-        onScanned={(data) => void handleScanned(data)}
-      />
+      {modals}
     </>
   );
 }

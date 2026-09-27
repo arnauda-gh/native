@@ -26,8 +26,10 @@ module.exports = {
   expo: {
     name: 'Bulwark Mobile',
     slug: 'bulwark-mobile',
-    // mailto: lets Android/iOS offer the app for mail links in other apps.
-    scheme: ['bulwarkmobile', 'mailto'],
+    // mailto: lets Android/iOS offer the app for mail links in other apps;
+    // bulwarkmail: is the webmail's sign-in link (bulwarkmail://pair?...).
+    // Android's manifest is maintained by hand and lists the same schemes.
+    scheme: ['bulwarkmobile', 'bulwarkmail', 'mailto'],
     version: VERSION,
     orientation: 'portrait',
     icon: './assets/icon.png',

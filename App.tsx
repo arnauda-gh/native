@@ -73,7 +73,8 @@ import { AppIconBadge } from './src/components/AppIconBadge';
 import { getEmails } from './src/api/email';
 import { signOutWidgets, startWidgetSync } from './src/widgets/sync';
 import { draftContextFromEmail } from './src/lib/draft-context';
-import { handleDeepLink, parseDeepLink, shareToDeepLink, type DeepLink } from './src/navigation/linking';
+import { acceptSignInLink, handleDeepLink, parseDeepLink, shareToDeepLink, type DeepLink } from './src/navigation/linking';
+import { usePendingSignInLinkStore } from './src/navigation/pending-sign-in-link';
 import { addShareListener, getInitialShare, shareAttachments } from './src/lib/share-intent';
 import { OfflineCacheBanner } from './src/components/OfflineCacheBanner';
 import { useOfflineCacheStore } from './src/stores/offline-cache-store';
@@ -85,6 +86,10 @@ import { useColors } from './src/theme/colors';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabsParamList>();
 const navigationRef = createNavigationContainerRef<RootStackParamList>();
+
+// The launch URL is read once per process: Android hands the same intent back
+// on every getInitialURL(), and a sign-in link must not run twice.
+let initialSignInLinkRead = false;
 
 async function navigateToNotificationTap(payload: NotificationTapPayload): Promise<void> {
   if (!navigationRef.isReady()) return;
@@ -565,6 +570,40 @@ export default function App() {
       shareSub();
     };
   }, [isAuthenticated]);
+
+  // Sign-in links (`bulwarkmail://pair?…` from the webmail's Link Mobile App,
+  // `bulwarkmail://connect?…`) work signed out too, so unlike the links above
+  // they are listened for from launch. They are parked for the login screen:
+  // the signed-out one takes them as it mounts.
+  React.useEffect(() => {
+    if (!initialSignInLinkRead) {
+      initialSignInLinkRead = true;
+      void Linking.getInitialURL().then((url) => { acceptSignInLink(url); }).catch(() => undefined);
+    }
+    const subscription = Linking.addEventListener('url', ({ url }) => { acceptSignInLink(url); });
+    return () => subscription.remove();
+  }, []);
+
+  // Signed in, a sign-in link adds an account: open Add account, whose login
+  // screen takes the parked link. On a cold start the navigator mounts right
+  // after the auth gate flips, so wait for it like a reminder tap does.
+  const signInLinkPending = usePendingSignInLinkStore((s) => s.payload !== null);
+  const addAccountForLink = isAuthenticated && signInLinkPending;
+  React.useEffect(() => {
+    if (!addAccountForLink) return;
+    let cancelled = false;
+    void (async () => {
+      for (let attempt = 0; attempt < 50 && !navigationRef.isReady(); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (cancelled) return;
+      }
+      if (cancelled || !navigationRef.isReady()) return;
+      // Taken meanwhile (Add account was already open).
+      if (!usePendingSignInLinkStore.getState().payload) return;
+      navigationRef.navigate('AddAccount');
+    })();
+    return () => { cancelled = true; };
+  }, [addAccountForLink]);
 
   // Re-register the device with the configured relay once authenticated,
   // and whenever the FCM token rotates. Honours the user's notification

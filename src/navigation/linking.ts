@@ -9,8 +9,14 @@ import type { RootStackParamList } from './types';
 import { setPendingSettingsTab } from './pending-settings-tab';
 import { setPendingCalendarOpen } from './pending-calendar-open';
 import { setPendingMailSearch } from './pending-mail-search';
+import { setPendingSignInLink } from './pending-sign-in-link';
+import { parseQrLoginPayload, type QrLoginPayload } from '../lib/oauth';
 
 export const APP_SCHEME = 'bulwarkmobile';
+// The webmail's "Link Mobile App" links (`bulwarkmail://pair?server=…&code=…`)
+// and server-bootstrap links (`bulwarkmail://connect?server=…`). They sign in
+// rather than navigate, so they never become a DeepLink.
+export const SIGN_IN_SCHEME = 'bulwarkmail';
 
 const UNIFIED_ROLES = ['inbox', 'sent', 'drafts', 'junk', 'archive', 'trash'] as const;
 const UNIFIED_VIEWS = ['all', 'unread', 'starred'] as const;
@@ -74,6 +80,7 @@ function splitUrl(url: string): { segments: string[]; search: URLSearchParams } 
 
 export function parseDeepLink(url: string): DeepLink | null {
   if (!url) return null;
+  if (isSignInSchemeUrl(url)) return null;
   if (/^mailto:/i.test(url)) {
     const parsed = parseMailtoUrl(url);
     if (!parsed) return null;
@@ -164,6 +171,28 @@ export function parseDeepLink(url: string): DeepLink | null {
     default:
       return null;
   }
+}
+
+function isSignInSchemeUrl(url: string): boolean {
+  return url.trim().toLowerCase().startsWith(`${SIGN_IN_SCHEME}:`);
+}
+
+/** A `bulwarkmail://pair|connect?…` link, parsed; null for any other URL. */
+export function parseSignInLink(url: string | null | undefined): QrLoginPayload | null {
+  if (!url || !isSignInSchemeUrl(url)) return null;
+  return parseQrLoginPayload(url);
+}
+
+/**
+ * Park a tapped sign-in link for the login screen, which takes it (the
+ * signed-out one, or Add account when someone is signed in). Returns whether
+ * `url` was one.
+ */
+export function acceptSignInLink(url: string | null | undefined): boolean {
+  const payload = parseSignInLink(url);
+  if (!payload) return false;
+  setPendingSignInLink(payload);
+  return true;
 }
 
 export interface DeepLinkNavigator {

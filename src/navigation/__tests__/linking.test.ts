@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { handleDeepLink, parseDeepLink, shareToDeepLink } from '../linking';
+import { acceptSignInLink, handleDeepLink, parseDeepLink, parseSignInLink, shareToDeepLink } from '../linking';
+import { setPendingSignInLink, usePendingSignInLinkStore } from '../pending-sign-in-link';
 import { usePendingSettingsTab } from '../pending-settings-tab';
 import { usePendingCalendarOpen } from '../pending-calendar-open';
 import { usePendingMailSearch } from '../pending-mail-search';
@@ -255,5 +256,46 @@ describe('shareToDeepLink', () => {
     expect(shareToDeepLink({ text: 'alice+news@partner.example' })).toEqual({
       kind: 'compose', to: [{ email: 'alice+news@partner.example' }], cc: [], subject: undefined,
     });
+  });
+});
+
+describe('sign-in links', () => {
+  const code = 'c0ffee'.repeat(10) + 'beef';
+  const pair = `bulwarkmail://pair?server=${encodeURIComponent('https://mail.example.com/webmail')}&code=${code}`;
+
+  it('are never navigation links', () => {
+    expect(parseDeepLink(pair)).toBeNull();
+    expect(parseDeepLink('bulwarkmail://connect?server=https%3A%2F%2Fmail.example.com')).toBeNull();
+    // The scheme is not an alias of the app scheme.
+    expect(parseDeepLink('bulwarkmail://mail/message/M1')).toBeNull();
+  });
+
+  it('parses pair and connect links, and nothing else', () => {
+    expect(parseSignInLink(pair)).toEqual({ kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code });
+    expect(parseSignInLink(pair.replace('://pair?', '://pair/?'))).toEqual({
+      kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code,
+    });
+    expect(parseSignInLink('bulwarkmail://connect?server=https%3A%2F%2Fmail.example.com'))
+      .toEqual({ kind: 'connect', webmailUrl: 'https://mail.example.com' });
+    // A plain webmail address is a QR convenience, not a link that signs in.
+    expect(parseSignInLink('https://mail.example.com')).toBeNull();
+    expect(parseSignInLink('bulwarkmobile://mail/message/M1')).toBeNull();
+    expect(parseSignInLink(`bulwarkmail://pair?server=http%3A%2F%2Fmail.example.com&code=${code}`)).toBeNull();
+    expect(parseSignInLink(null)).toBeNull();
+  });
+
+  it('parks a sign-in link for the login screen, which takes it once', () => {
+    setPendingSignInLink(null);
+    expect(acceptSignInLink('bulwarkmobile://mail')).toBe(false);
+    expect(acceptSignInLink('mailto:a@b.co')).toBe(false);
+    expect(usePendingSignInLinkStore.getState().payload).toBeNull();
+
+    expect(acceptSignInLink(pair)).toBe(true);
+    expect(usePendingSignInLinkStore.getState().take()).toEqual({
+      kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code,
+    });
+    // Taken means cleared: a second delivery of the same state signs in nothing.
+    expect(usePendingSignInLinkStore.getState().payload).toBeNull();
+    expect(usePendingSignInLinkStore.getState().take()).toBeNull();
   });
 });

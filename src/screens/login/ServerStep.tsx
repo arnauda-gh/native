@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { Globe, QrCode } from 'lucide-react-native';
+import { ClipboardPaste, Globe, QrCode } from 'lucide-react-native';
 import { spacing, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors } from '../../theme/colors';
 import { Button, Input } from '../../components';
@@ -12,6 +12,7 @@ interface ServerStepProps {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onScan: () => void;
+  onPaste: () => void;
   /** Set when we got here because discovery came back empty for this domain. */
   failedDomain?: string | null;
   notice?: { title: string; detail?: string } | null;
@@ -27,6 +28,7 @@ export default function ServerStep({
   onChange,
   onSubmit,
   onScan,
+  onPaste,
   failedDomain,
   notice,
 }: ServerStepProps) {
@@ -67,12 +69,20 @@ export default function ServerStep({
         {t('login.mobile.continue', 'Continue')}
       </Button>
 
-      <Pressable onPress={onScan} hitSlop={8} style={styles.scanRow}>
-        <QrCode size={15} color={c.textMuted} />
-        <Text style={styles.scanText}>
-          {t('login.mobile.server_scan_hint', "If you're not sure, scan a sign-in code instead. It carries the server address.")}
-        </Text>
-      </Pressable>
+      <View>
+        <Pressable onPress={onScan} hitSlop={8} style={styles.scanRow} accessibilityRole="button">
+          <QrCode size={15} color={c.textMuted} />
+          <Text style={styles.scanText}>
+            {t('login.mobile.server_scan_hint', "If you're not sure, scan a sign-in code instead. It carries the server address.")}
+          </Text>
+        </Pressable>
+        <Pressable onPress={onPaste} hitSlop={8} style={styles.scanRow} accessibilityRole="button">
+          <ClipboardPaste size={15} color={c.textMuted} />
+          <Text style={styles.scanText}>
+            {t('login.mobile.server_paste_hint', 'Have a sign-in link instead? Paste it here.')}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }

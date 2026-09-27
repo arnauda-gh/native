@@ -28,6 +28,13 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <data android:scheme="bulwarkmobile"/>
       </intent-filter>
+      <!-- Sign-in links from the webmail (bulwarkmail://pair?..., bulwarkmail://connect?...). -->
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="bulwarkmail"/>
+      </intent-filter>
       <intent-filter>
         <action android:name="android.intent.action.VIEW"/>
         <action android:name="android.intent.action.SENDTO"/>
