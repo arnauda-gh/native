@@ -17,6 +17,7 @@ import {
   type RunPayload,
   type RunReport,
   type RunStatus,
+  type Row,
 } from '../types';
 import { BatchWriter } from './batch';
 import { CalendarSync } from './calendar-sync';
@@ -26,7 +27,7 @@ import type { RunEnv } from './context';
 import { DEFAULT_TUNING, type EngineDeps, type Tuning } from './deps';
 import { classifyFailure, RunAbort } from './errors';
 import { acquireLock, lockKey, stopRequested } from './mutex';
-import { ProviderReader, str } from './provider';
+import { flag, ProviderReader, str } from './provider';
 import { isQuietRun, ReportBuilder, statusOf, statusToRecord } from './report';
 import { emptySyncState, parseSyncState, StateStore, type SyncState } from './sync-state';
 import type { ItemSync } from './item-sync';
@@ -46,6 +47,15 @@ function itemTypeOf(authority: Authority): string {
   return authority === CONTACTS_AUTHORITY ? 'ContactCard' : 'CalendarEvent';
 }
 
+/**
+ * Whether a dirty, deleted or new raw contact or group has anything to
+ * upload. One created and deleted on the device before a run claimed it (no
+ * identity, no pending create) never reached the server: a run purges it.
+ */
+export function waitsForUpload(row: Row): boolean {
+  return !!str(row.sourceid) || !!str(row.sync3) || !flag(row.deleted);
+}
+
 /** Rows waiting for an upload (dirty, deleted, new), or state work a run must do whatever its extras. */
 export async function hasLocalWork(reader: ProviderReader, authority: Authority, state: SyncState): Promise<boolean> {
   for (const account of Object.values(state.accounts)) {
@@ -55,11 +65,11 @@ export async function hasLocalWork(reader: ProviderReader, authority: Authority,
     const rows = await reader.rows('events', ['_id'], "dirty = 1 OR deleted = 1 OR _sync_id IS NULL OR _sync_id LIKE '~pending/%'");
     return rows.length > 0;
   }
-  const contacts = await reader.rows('raw_contacts', ['_id'], 'dirty = 1 OR deleted = 1 OR sourceid IS NULL');
-  if (contacts.length) return true;
-  const groups = await reader.rows('groups', ['_id', 'sourceid', 'dirty', 'deleted']);
+  const contacts = await reader.rows('raw_contacts', ['_id', 'sourceid', 'deleted', 'sync3'], 'dirty = 1 OR deleted = 1 OR sourceid IS NULL');
+  if (contacts.some(waitsForUpload)) return true;
+  const groups = await reader.rows('groups', ['_id', 'sourceid', 'dirty', 'deleted', 'sync3']);
   const present = new Set(groups.map((g) => str(g.sourceid)).filter(Boolean));
-  if (groups.some((g) => !str(g.sourceid) || Number(g.dirty) === 1 || Number(g.deleted) === 1)) return true;
+  if (groups.some((g) => (!str(g.sourceid) || Number(g.dirty) === 1 || Number(g.deleted) === 1) && waitsForUpload(g))) return true;
   // A group an app hard-deleted is only found by its absence.
   return Object.values(state.accounts).some((a) => (a.groups ?? []).some((ref) => !present.has(ref)));
 }

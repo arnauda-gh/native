@@ -12,7 +12,7 @@ import type { EngineDeps } from './deps';
 import { acquireLock, clearStopRequest, lockKey, requestStop } from './mutex';
 import { ProviderReader, str } from './provider';
 import { ReportBuilder } from './report';
-import { createEnv, tuningOf } from './run';
+import { createEnv, tuningOf, waitsForUpload } from './run';
 import { parseSyncState } from './sync-state';
 
 export interface TeardownOptions {
@@ -36,12 +36,12 @@ export async function countPending(reader: ProviderReader, authority: Authority)
     const masters = new Set(rows.map((r) => str(r.original_id) ?? str(r.original_sync_id) ?? `row:${String(r._id)}`));
     return masters.size;
   }
-  const contacts = await reader.rows('raw_contacts', ['_id'], 'dirty = 1 OR deleted = 1 OR sourceid IS NULL');
-  const groups = await reader.rows('groups', ['_id', 'sourceid', 'dirty', 'deleted']);
+  const contacts = await reader.rows('raw_contacts', ['_id', 'sourceid', 'deleted', 'sync3'], 'dirty = 1 OR deleted = 1 OR sourceid IS NULL');
+  const groups = await reader.rows('groups', ['_id', 'sourceid', 'dirty', 'deleted', 'sync3']);
   const present = new Set(groups.map((g) => str(g.sourceid)).filter(Boolean));
-  const waitingGroups = groups.filter((g) => !str(g.sourceid) || Number(g.dirty) === 1 || Number(g.deleted) === 1).length;
+  const waitingGroups = groups.filter((g) => (!str(g.sourceid) || Number(g.dirty) === 1 || Number(g.deleted) === 1) && waitsForUpload(g)).length;
   const absent = Object.values(state.accounts).reduce((n, a) => n + (a.groups ?? []).filter((ref) => !present.has(ref)).length, 0);
-  return contacts.length + waitingGroups + absent;
+  return contacts.filter(waitsForUpload).length + waitingGroups + absent;
 }
 
 function deleteEverything(authority: Authority): ProviderOp[] {

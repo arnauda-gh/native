@@ -886,13 +886,15 @@ export abstract class ItemSync {
   /**
    * New items get their uid and target written before anything is sent. A
    * claim whose collection is gone from the server is made again where the
-   * kind allows it (contacts: nothing of it can exist in a deleted book).
+   * kind allows it (contacts: nothing of it can exist in a deleted book). A
+   * new item deleted before it was claimed never reached the server, and no
+   * upload phase takes it (it has no account): its plan is a purge.
    */
   private async claimNewItems(): Promise<void> {
     const works: Work[] = [];
     for (const held of await this.loadUploadItems()) {
       const meta = held.kind.meta(held.local);
-      if (!meta.isNew || meta.deleted || !this.claimable(held)) continue;
+      if (!meta.isNew || (meta.deleted && meta.pending) || !this.claimable(held)) continue;
       const reclaim = !!meta.pending && !!held.kind.unclaimed && this.collectionGone(meta.pending.target);
       if (meta.pending && !reclaim) continue;
       const ref = `row:${meta.rowId}`;
