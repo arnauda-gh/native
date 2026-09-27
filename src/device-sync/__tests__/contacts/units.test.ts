@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Data, MimeType, PhoneType, RelationType } from '../../android-columns';
 import { contactsPlanner } from '../../contacts/planner';
 import { entryKey, orgKey, parseEntryKey, parseOrgKey } from '../../contacts/keys';
-import { editPostalComponents, postalCells } from '../../contacts/postal';
+import { editPostalComponents, postalCells, resplitPostal } from '../../contacts/postal';
 import { base64ToBytes, dataUriBase64, shadowOf } from '../../contacts/photo';
 import { fullIsDerived, nameCells } from '../../contacts/name';
 import { phoneFlags, phoneType, relationName, relationType } from '../../contacts/types-map';
@@ -116,6 +116,24 @@ describe('contacts name and postal helpers', () => {
     expect(fullIsDerived({ components, full: 'A B' })).toBe(true);
     expect(fullIsDerived({ components, full: 'A B C' })).toBe(true);
     expect(fullIsDerived({ components, full: 'B, A' })).toBe(false);
+  });
+
+  it('reads the parts of a rewritten one-line address back along the old line', () => {
+    // Apple's layout: street / city region postcode / country.
+    const old = { data1: '1 Infinite Loop\nCupertino CA 95014\nUSA', data4: '1 Infinite Loop', data7: 'Cupertino', data8: 'CA', data9: '95014', data10: 'USA' };
+    const parts = (line: string) => {
+      const out = resplitPostal(old, line);
+      return out && { street: out.data4, city: out.data7, region: out.data8, postcode: out.data9, country: out.data10 };
+    };
+    expect(parts('1 Apple Park Way\nCupertino CA 95014\nUSA')).toEqual({ street: '1 Apple Park Way', city: 'Cupertino', region: 'CA', postcode: '95014', country: 'USA' });
+    expect(parts('1 Infinite Loop\nSan Jose CA 95014\nUSA')).toMatchObject({ city: 'San Jose', region: 'CA', postcode: '95014' });
+    expect(parts('1 Infinite Loop\nCupertino 95014\nUSA')).toMatchObject({ city: 'Cupertino', region: null, postcode: '95014' });
+    expect(parts('1 Infinite Loop, Cupertino CA 95014, USA')).toMatchObject({ street: '1 Infinite Loop', city: 'Cupertino' });
+    // Two parts of one segment changed, or the layout changed: nothing to pin the words to.
+    expect(parts('1 Infinite Loop\nSan Jose NV 95014\nUSA')).toBeNull();
+    expect(parts('1 Infinite Loop\nCupertino CA 95014\nCalifornia\nUSA')).toBeNull();
+    // An old line that isn't made of the parts (a `full` written apart from its components).
+    expect(resplitPostal({ ...old, data1: 'Apple HQ, Cupertino' }, 'Apple Park, Cupertino')).toBeNull();
   });
 
   it('keeps separators between street parts and falls back to the legacy flat fields', () => {

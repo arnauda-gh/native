@@ -10,29 +10,49 @@ import { CommonKind, Data, MimeType, StructuredPostal as SP } from '../android-c
 import type { Row } from '../types';
 import { changedFromBaseline, sameCell, text } from './cells';
 import type { Match } from './matching';
-import { POSTAL_PART_COLUMNS } from './postal';
+import { POSTAL_PART_COLUMNS, providerSplitPostal, resplitPostal } from './postal';
 import { SPECS, type Unit } from './project';
 
+const isPart = (column: string) => (POSTAL_PART_COLUMNS as readonly string[]).includes(column);
+
+/** A postal row holding the provider's split of a formatted address an editor wrote alone. */
+function isProviderSplit(m: Match): boolean {
+  const { row } = m;
+  if (row.mimetype !== MimeType.STRUCTURED_POSTAL || !providerSplitPostal(row.cells)) return false;
+  // A multi-part formatted address in STREET was the provider's split, not a typed street.
+  return m.how !== 'key' || !row.baseline || /[,\n]/.test(text(row.cells[SP.FORMATTED_ADDRESS]) ?? '');
+}
+
+/** The address as the device showed it before the edit: a keyed row's baseline, else the shadow's. */
+function postalBefore(m: Match): Row {
+  return m.how === 'key' && m.row.baseline ? m.row.baseline : m.unit.cells;
+}
+
 /**
- * A postal row whose parts are only its formatted address copied into STREET:
- * the provider's split of an editor that wrote FORMATTED_ADDRESS alone.
+ * The cells an upload takes a row's values from: its own, except for a
+ * provider split whose line changed. Its parts are read back from the new
+ * line along the old one (`resplitPostal`), else they stay what the device
+ * holds, the whole line as the street: `full` and the components never
+ * contradict each other on the server.
  */
-function providerSplitPostal(cells: Row): boolean {
-  const street = text(cells[SP.STREET]);
-  return street !== null
-    && street === text(cells[SP.FORMATTED_ADDRESS])
-    && POSTAL_PART_COLUMNS.every((c) => c === SP.STREET || text(cells[c]) === null);
+export function uploadCells(m: Match): Row {
+  if (!isProviderSplit(m)) return m.row.cells;
+  const before = postalBefore(m);
+  const line = text(m.row.cells[SP.FORMATTED_ADDRESS]);
+  if (!line || sameCell(line, before[SP.FORMATTED_ADDRESS])) return m.row.cells;
+  return { ...m.row.cells, ...(resplitPostal(before, line) ?? {}) };
 }
 
 export function localChanges(m: Match): string[] {
-  const { row, unit } = m;
+  const { unit } = m;
   const changed = rawChanges(m).filter((c) => !unit.truncated?.includes(c));
-  if (row.mimetype === MimeType.STRUCTURED_POSTAL && providerSplitPostal(row.cells)) {
-    // A multi-part formatted address in STREET was the provider's split, not a typed street.
-    const split = m.how !== 'key' || !row.baseline || /[,\n]/.test(text(row.cells[SP.FORMATTED_ADDRESS]) ?? '');
-    if (split) return changed.filter((c) => !(POSTAL_PART_COLUMNS as readonly string[]).includes(c));
-  }
-  return changed;
+  if (!isProviderSplit(m)) return changed;
+  // The provider's split is no typed street: only a new line changes the parts, to what it says.
+  const others = changed.filter((c) => !isPart(c));
+  if (!others.includes(SP.FORMATTED_ADDRESS)) return others;
+  const before = postalBefore(m);
+  const after = uploadCells(m);
+  return [...others, ...POSTAL_PART_COLUMNS.filter((c) => !sameCell(after[c], before[c]))];
 }
 
 function rawChanges(m: Match): string[] {

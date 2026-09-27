@@ -90,6 +90,80 @@ export function predictStoredPostal(cells: Row): Row {
   return out;
 }
 
+/**
+ * A postal row whose parts are only its formatted address copied into STREET:
+ * the provider's split of an editor that wrote FORMATTED_ADDRESS alone.
+ */
+export function providerSplitPostal(cells: Row): boolean {
+  const street = text(cells[SP.STREET]);
+  return street !== null
+    && street === text(cells[SP.FORMATTED_ADDRESS])
+    && POSTAL_PART_COLUMNS.every((c) => c === SP.STREET || text(cells[c]) === null);
+}
+
+/** Lines and comma-separated segments of a formatted address. */
+const SEGMENT = /\s*(?:,|\r?\n)\s*/;
+
+const wordsOf = (value: string) => value.split(/\s+/).filter(Boolean);
+
+function wordsAt(words: string[], part: string[], at: number): boolean {
+  return at >= 0 && at + part.length <= words.length && part.every((w, i) => words[at + i] === w);
+}
+
+/** The parts one segment of the old line is made of, in their order there (each part used once). */
+function segmentParts(segment: string[], parts: Map<string, string[]>, used: Set<string>): string[] | null {
+  if (!segment.length) return [];
+  for (const [column, words] of parts) {
+    if (used.has(column) || !wordsAt(segment, words, 0)) continue;
+    used.add(column);
+    const rest = segmentParts(segment.slice(words.length), parts, used);
+    if (rest) return [column, ...rest];
+    used.delete(column);
+  }
+  return null;
+}
+
+/**
+ * The parts of an address whose formatted line an editor rewrote alone (the
+ * provider then empties them on the device), read back along the old line:
+ * each segment of the old line must be the words of some old parts in a row,
+ * and the new line must have as many segments. A changed segment gives its
+ * words to its one part, or to the one part left once the parts at its start
+ * and end are found unchanged there. Null when the layout changed, or a change
+ * can't be pinned to one part.
+ */
+export function resplitPostal(old: Row, line: string): Row | null {
+  const before = text(old[SP.FORMATTED_ADDRESS]);
+  if (!before) return null;
+  const parts = new Map<string, string[]>();
+  for (const c of POSTAL_PART_COLUMNS) {
+    const value = text(old[c]);
+    if (value) parts.set(c, wordsOf(value));
+  }
+  const oldSegments = before.split(SEGMENT).map(wordsOf).filter((w) => w.length);
+  const newSegments = line.split(SEGMENT).map(wordsOf).filter((w) => w.length);
+  if (oldSegments.length !== newSegments.length) return null;
+  const out: Row = { [SP.FORMATTED_ADDRESS]: line };
+  for (const c of POSTAL_PART_COLUMNS) out[c] = text(old[c]);
+  const used = new Set<string>();
+  for (let i = 0; i < oldSegments.length; i++) {
+    const columns = segmentParts(oldSegments[i], parts, used);
+    if (!columns) return null;
+    const words = newSegments[i];
+    if (words.join(' ') === oldSegments[i].join(' ')) continue;
+    const size = (k: number) => parts.get(columns[k])!.length;
+    let first = 0;
+    let start = 0;
+    while (first < columns.length - 1 && wordsAt(words, parts.get(columns[first])!, start)) start += size(first++);
+    let last = columns.length;
+    let end = words.length;
+    while (last - 1 > first && end - size(last - 1) >= start && wordsAt(words, parts.get(columns[last - 1])!, end - size(last - 1))) end -= size(--last);
+    if (last - first !== 1) return null;
+    out[columns[first]] = words.slice(start, end).join(' ') || null;
+  }
+  return out;
+}
+
 /** The address's components with the edited columns applied (a list for `addresses/<k>/components`). */
 export function editPostalComponents(address: ContactAddress, cells: Row, changed: ReadonlySet<string>): Component[] {
   const comps = clone(components(address));

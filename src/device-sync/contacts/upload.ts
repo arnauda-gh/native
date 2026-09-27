@@ -22,7 +22,7 @@ import type {
 } from '../planner';
 import type { ProviderOp } from '../types';
 import { encodeBaseline } from './cells';
-import { localChanges } from './diff';
+import { localChanges, uploadCells } from './diff';
 import { accountOf, cardUnits, cleanWrite } from './download';
 import { newEntries, unitEdits, unitEntries, type Edit, type NewEntry } from './entries';
 import { parseEntryKey } from './keys';
@@ -88,7 +88,7 @@ function collectChanges(local: LocalContact, shadow: ContactCardWire, ctx: Ctx):
       const changed = localChanges(m);
       if (!changed.length) continue;
       const shown = kind.mimetype === MimeType.RELATION ? (m.unit.cells[Data.DATA1] as string | null) : null;
-      const e = unitEdits(kind.mimetype, m.unit.key, shadow, m.row.cells, m.unit.cells, new Set(changed), shown, m.how === 'key');
+      const e = unitEdits(kind.mimetype, m.unit.key, shadow, uploadCells(m), m.unit.cells, new Set(changed), shown, m.how === 'key');
       out.edits.push(...e.edits);
       out.added.push(...e.added);
       out.removed.push(...e.removed);

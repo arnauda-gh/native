@@ -108,6 +108,113 @@ describe('contacts upload: one edited field, one pointer', () => {
   });
 });
 
+describe('contacts upload: an address edited as one line (AOSP Contacts)', () => {
+  const munich = () => ({
+    name: { full: 'Maria Muster' },
+    addresses: {
+      home: {
+        contexts: { private: true },
+        coordinates: 'geo:48.137,11.575',
+        components: [
+          { kind: 'name', value: 'Marienplatz 1' },
+          { kind: 'postcode', value: '80331' },
+          { kind: 'locality', value: 'Munich' },
+          { kind: 'region', value: 'Bavaria' },
+          { kind: 'country', value: 'Germany' },
+        ],
+      },
+    },
+  });
+  const LINE = 'Marienplatz 1, 80331 Munich, Bavaria, Germany';
+
+  /** AOSP writes the formatted address alone; the provider keeps it in STREET and empties the other parts. */
+  async function editLine(line: string) {
+    const h = new Harness();
+    const { id, rawId } = await h.seed(munich());
+    const row = h.rowsByKey(rawId)['addresses:home'];
+    expect(row.data1).toBe(LINE);
+    h.device.user.updateData(row._id as number, { data1: line, data4: null, data5: null, data6: null, data7: null, data8: null, data9: null, data10: null });
+    expect(h.rowsByKey(rawId)['addresses:home']).toMatchObject({ data1: line, data4: line, data7: null });
+    return { h, id, rawId };
+  }
+
+  async function patchOf(h: Harness, rawId: number): Promise<PatchObject> {
+    const plan = h.planner.planUpload(await h.contact(rawId), h.ctx);
+    if (plan.kind !== 'upload' || plan.actions[0].kind !== 'update') throw new Error(`expected an update, got ${plan.kind}`);
+    return plan.actions[0].patch;
+  }
+
+  const components = (street: string, locality = 'Munich', postcode = '80331') => [
+    { kind: 'name', value: street },
+    { kind: 'postcode', value: postcode },
+    { kind: 'locality', value: locality },
+    { kind: 'region', value: 'Bavaria' },
+    { kind: 'country', value: 'Germany' },
+  ];
+
+  it('reads the parts back from the new line, so `full` and the components agree', async () => {
+    const line = 'Industrieweg 42, 80331 Augsburg, Bavaria, Germany';
+    const { h, id, rawId } = await editLine(line);
+    expect(await patchOf(h, rawId)).toEqual({
+      'addresses/home/components': components('Industrieweg 42', 'Augsburg'),
+      'addresses/home/full': line,
+    });
+    await h.upload(rawId);
+    expect(h.card(id).addresses!.home).toEqual({
+      contexts: { private: true }, coordinates: 'geo:48.137,11.575', isOrdered: true, full: line,
+      components: components('Industrieweg 42', 'Augsburg'),
+    });
+    // The device gets its parts back and settles.
+    expect(h.rowsByKey(rawId)['addresses:home']).toMatchObject({ data1: line, data4: 'Industrieweg 42', data7: 'Augsburg', data9: '80331' });
+    const local = await h.contact(rawId);
+    expect(local.dirty).toBe(false);
+    expect(h.planner.planDownload(h.card(id), local, h.ctx).effect).toBe('none');
+  });
+
+  it('changes only the part whose words changed', async () => {
+    const { h, rawId } = await editLine('Marienplatz 2, 80331 Munich, Bavaria, Germany');
+    expect(await patchOf(h, rawId)).toEqual({
+      'addresses/home/components': components('Marienplatz 2'),
+      'addresses/home/full': 'Marienplatz 2, 80331 Munich, Bavaria, Germany',
+    });
+  });
+
+  it('keeps the whole line as the street when the change can not be pinned to one part', async () => {
+    const line = 'Industrieweg 42, 86150 Augsburg, Bavaria, Germany';
+    const { h, id, rawId } = await editLine(line);
+    expect(await patchOf(h, rawId)).toEqual({ 'addresses/home/components': [{ kind: 'name', value: line }], 'addresses/home/full': line });
+    await h.upload(rawId);
+    expect(h.card(id).addresses!.home).toMatchObject({ contexts: { private: true }, coordinates: 'geo:48.137,11.575', full: line, components: [{ kind: 'name', value: line }] });
+    const local = await h.contact(rawId);
+    expect(local.dirty).toBe(false);
+    expect(h.planner.planDownload(h.card(id), local, h.ctx).effect).toBe('none');
+  });
+
+  it('uploads nothing for the same line saved again', async () => {
+    const { h, rawId } = await editLine(LINE);
+    expect(h.planner.planUpload(await h.contact(rawId), h.ctx).kind).toBe('clean');
+  });
+
+  it('reads the parts back from a line an editor re-inserted without its key', async () => {
+    const line = 'Marienplatz 1, 80331 Munich, Upper Bavaria, Germany';
+    const h = new Harness();
+    const { rawId } = await h.seed(munich());
+    h.device.user.fossifySave(rawId, null, [{ [Data.MIMETYPE]: MimeType.STRUCTURED_POSTAL, data1: line, data2: 1 }]);
+    expect(await patchOf(h, rawId)).toEqual({
+      'addresses/home/components': components('Marienplatz 1').map((c) => (c.kind === 'region' ? { ...c, value: 'Upper Bavaria' } : c)),
+      'addresses/home/full': line,
+    });
+  });
+
+  it('edits the parts an editor kept as parts, whatever its line says', async () => {
+    const line = 'Marienplatz 1, 80331 Augsburg, Bavaria, Germany';
+    const h = new Harness();
+    const { rawId } = await h.seed(munich());
+    h.device.user.updateData(h.rowsByKey(rawId)['addresses:home']._id as number, { data7: 'Augsburg', data1: line });
+    expect(await patchOf(h, rawId)).toEqual({ 'addresses/home/components': components('Marienplatz 1', 'Augsburg'), 'addresses/home/full': line });
+  });
+});
+
 describe('contacts upload: the name', () => {
   const NAME_KEY = 'name';
 
