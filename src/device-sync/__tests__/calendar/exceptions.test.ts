@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Attendees, Events, Reminders } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
+import { cssColorToArgb } from '../../calendar/values';
 import type { LocalEvent, UploadPlan } from '../../planner';
 import type { CalendarEventWire } from '../../wire';
 import { ACCT, Harness, ME, serverApply, single, utc, weekly } from './harness';
@@ -192,6 +193,80 @@ describe('calendar planner: recurrence edits made on the device', () => {
     const patch = patchOf(plan).patch;
     expect(patch['recurrenceOverrides/2026-10-07T09:00:00/useDefaultAlerts']).toBe(false);
     expect(patch['recurrenceOverrides/2026-10-14T09:00:00']).toMatchObject({ useDefaultAlerts: false });
+  });
+
+  it('clears an occurrence\'s own colour instead of letting the series\' come back', async () => {
+    const event = weekly();
+    event.recurrenceOverrides!['2026-10-07T09:00:00'] = { ...event.recurrenceOverrides!['2026-10-07T09:00:00'], color: 'red' };
+    const { h } = await synced(event);
+    const x = (await h.local('bl'))!.exceptions[0];
+    expect(h.row(x.eventId)[Events.EVENT_COLOR]).toBe(cssColorToArgb('red'));
+    h.fake.user.updateEvent(x.eventId, { [Events.EVENT_COLOR]: null });
+    const local = (await h.local('bl'))!;
+
+    const plan = calendarPlanner.planUpload(local, h.ctx);
+
+    // Without a colour of its own the occurrence would show the series' steelblue again: an empty one, which Stalwart keeps.
+    expect(patchOf(plan).patch).toEqual({ 'recurrenceOverrides/2026-10-07T09:00:00/color': '' });
+    const server = await accept(h, event, local, plan);
+    expect(h.row(x.eventId)).toMatchObject({ [Events.EVENT_COLOR]: null, [Events.DIRTY]: 0 });
+    expect(calendarPlanner.planDownload(server, (await h.local('bl'))!, h.ctx).effect).toBe('none');
+
+    // A series without a colour has none to show: the occurrence's own is removed.
+    const plain = weekly();
+    delete plain.color;
+    plain.recurrenceOverrides!['2026-10-07T09:00:00'] = { ...plain.recurrenceOverrides!['2026-10-07T09:00:00'], color: 'red' };
+    const p = await synced(plain);
+    const px = (await p.h.local('bl'))!.exceptions[0];
+    p.h.fake.user.updateEvent(px.eventId, { [Events.EVENT_COLOR]: null });
+    expect(patchOf(calendarPlanner.planUpload((await p.h.local('bl'))!, p.h.ctx)).patch).toEqual({ 'recurrenceOverrides/2026-10-07T09:00:00/color': null });
+  });
+
+  it('removes every reminder of one occurrence of a series on the calendar\'s defaults', async () => {
+    const event = weekly();
+    delete event.alerts;
+    event.useDefaultAlerts = true;
+    event.recurrenceOverrides!['2026-10-07T09:00:00'] = {
+      ...event.recurrenceOverrides!['2026-10-07T09:00:00'],
+      useDefaultAlerts: false,
+      alerts: { a60: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT1H', relativeTo: 'start' }, action: 'display' } },
+    };
+    const { h } = await synced(event);
+    const x = (await h.local('bl'))!.exceptions[0];
+    h.fake.user.setReminders(x.eventId, []);
+    const local = (await h.local('bl'))!;
+
+    const plan = calendarPlanner.planUpload(local, h.ctx);
+    const server = await accept(h, event, local, plan);
+
+    // Stalwart drops the empty map, but the series has no alerts of its own to show instead.
+    expect(server.recurrenceOverrides!['2026-10-07T09:00:00']).toMatchObject({ useDefaultAlerts: false });
+    expect(server.recurrenceOverrides!['2026-10-07T09:00:00']).not.toHaveProperty('alerts');
+    expect(h.fake.rows('reminders', `${Reminders.EVENT_ID} = ?`, [x.eventId])).toEqual([]);
+    expect(h.row(x.eventId)[Events.DIRTY]).toBe(0);
+    expect(calendarPlanner.planDownload(server, (await h.local('bl'))!, h.ctx).effect).toBe('none');
+  });
+
+  it('puts back and reports the removal of every reminder of one occurrence whose series would show its own again', async () => {
+    const event = weekly();
+    event.alerts = { al1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M', relativeTo: 'start' }, action: 'display' } };
+    const { h } = await synced(event);
+    const minutes = (eventId: number) => h.fake.rows('reminders', `${Reminders.EVENT_ID} = ?`, [eventId]).map((r) => Number(r[Reminders.MINUTES]));
+    const x = (await h.local('bl'))!.exceptions[0];
+    expect(minutes(x.eventId)).toEqual([15]);
+    h.fake.user.setReminders(x.eventId, []);
+
+    // An override without alerts shows the series' (Stalwart writes no VALARM for an empty map): none can't be stored.
+    const plan = calendarPlanner.planUpload((await h.local('bl'))!, h.ctx);
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'remindersNotRepresentable' });
+    if (plan.kind === 'revert') await h.apply(plan.ops);
+    expect(minutes(x.eventId)).toEqual([15]);
+    expect(h.row(x.eventId)[Events.DIRTY]).toBe(0);
+
+    // With another edit, that one goes up alone.
+    h.fake.user.setReminders(x.eventId, []);
+    h.fake.user.updateEvent(x.eventId, { [Events.TITLE]: 'Moved again' });
+    expect(patchOf(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx)).patch).toEqual({ 'recurrenceOverrides/2026-10-07T09:00:00/title': 'Moved again' });
   });
 
   it('patches an existing override one level deep, never deeper', async () => {

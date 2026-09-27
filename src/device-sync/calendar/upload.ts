@@ -50,6 +50,7 @@ import {
 } from './exceptions';
 import { eventImage, plainInstanceImage } from './image';
 import { isRemovedInstance } from './merge';
+import { reminderRows } from './reminders';
 import { isRuleRepresentable, partsToRule, ruleToRRule, rruleParts, untilUtc, type RuleZone } from './rrule';
 import { NOTIFYING_UNITS, sendsSchedulingMessages } from './scheduling';
 import { fixedOffsetTiming, rowTiming, type RowTiming } from './timing';
@@ -90,6 +91,8 @@ export const SKIP = {
   rsvpRefused: 'rsvpRefused',
   /** Moved in place to a calendar of another JMAP account: no patch can do that. */
   crossAccountMove: 'crossAccountMove',
+  /** Every reminder removed from one occurrence of a series with alerts of its own: the occurrence would show those. */
+  remindersNotRepresentable: 'remindersNotRepresentable',
 } as const;
 
 export class SkipUpload extends Error {
@@ -373,6 +376,7 @@ export function computeUpdate(local: LocalEvent, ctx: CalendarContext): UploadCo
   if (!ruleRemoved && shadow.recurrenceRule) {
     for (const x of local.exceptions) {
       const units = exceptionChanges(x, local, shadow, calendarId, zone, overrides, removedExceptions, ctx, lossy);
+      if (units.dropped) dropped.push(...units.dropped);
       if (units.units.size) {
         exceptionUnits.set(x.eventId, units.units);
         overridesChanged = true;
@@ -423,7 +427,7 @@ function exceptionChanges(
   removed: Set<number>,
   ctx: CalendarContext,
   lossy: boolean,
-): { units: Set<string>; rsvp: boolean; others?: boolean } {
+): { units: Set<string>; rsvp: boolean; others?: boolean; dropped?: string[] } {
   const units = new Set<string>();
   const key = x.recurrenceId;
   if (!key) return { units, rsvp: false };
@@ -478,7 +482,7 @@ function exceptionChanges(
         values.freeBusyStatus = availabilityFromDevice(cells[Events.AVAILABILITY]);
         break;
       case 'color':
-        values.color = argbToCss(cells[Events.EVENT_COLOR]);
+        values.color = argbToCss(cells[Events.EVENT_COLOR]) ?? clearedInOverride('color', instance, shadow);
         break;
       case 'timing': {
         const moved = columnUnitDiffers('timing', cur, reference);
@@ -519,22 +523,30 @@ function exceptionChanges(
       units.add('attendees');
     }
   }
+  let dropped: string[] | undefined;
   if (ctx.reminderOwner === 'device' && (existing || cur.reminders!.length) && remindersDiffer(cur, reference)) {
-    values.alerts = reminderChanges(instance, ctx.calendar(calendarId), cur.reminders!, ctx.mintKey).alerts;
-    // An occurrence on the calendar's defaults ignores its own alerts: it leaves them, as a series does
-    // (Stalwart keeps the override's `useDefaultAlerts` as a JSPROP; the series stays on the defaults).
-    if (instance.useDefaultAlerts) values.useDefaultAlerts = false;
-    units.add('reminders');
+    const alerts = reminderChanges(instance, ctx.calendar(calendarId), cur.reminders!, ctx.mintKey).alerts;
+    if (!Object.keys(alerts).length && reminderRows(shadow.alerts).length) {
+      // An override is stored as a VEVENT of its own and an empty map writes no VALARM, so an override without
+      // alerts shows the series' again: none at all can't be stored while the series has alerts of its own.
+      dropped = ['reminders'];
+    } else {
+      values.alerts = alerts;
+      // An occurrence on the calendar's defaults ignores its own alerts: it leaves them, as a series does
+      // (Stalwart keeps the override's `useDefaultAlerts` as a JSPROP; the series stays on the defaults).
+      if (instance.useDefaultAlerts) values.useDefaultAlerts = false;
+      units.add('reminders');
+    }
   }
 
   if (existing) {
     if (units.size) work.props.set(key, { ...(work.props.get(key) ?? {}), ...values });
-    return { units, rsvp, others };
+    return { units, rsvp, others, dropped };
   }
   // A new override: nothing but its pinned time is still an override (an app saving the instance unchanged).
   if (!units.size) units.add('new');
   work.whole.set(key, newOverride(shadow, key, values));
-  return { units, rsvp, others };
+  return { units, rsvp, others, dropped };
 }
 
 /** Units a new exception row inherits from its series when it leaves them empty. */
@@ -547,15 +559,17 @@ function isEmptyUnit(unit: string, cells: Row): boolean {
 }
 
 /**
- * A description or location cleared on an existing override. An override
- * without one of its own shows the series' again, so while the series has
- * one the override gets the empty value Stalwart keeps: the empty text, or a
- * location without a name (an empty map writes no LOCATION line and reads
- * back as none of its own). Null, a clean removal, when nothing would come
- * back.
+ * A description, location or colour cleared on an existing override. An
+ * override without one of its own shows the series' again, so while the
+ * series has one the override gets the empty value Stalwart keeps: the empty
+ * text or colour (an empty DESCRIPTION or COLOR; an empty colour is none, the
+ * calendar's, on the device), or a location without a name (an empty map
+ * writes no LOCATION line and reads back as none of its own). Null, a clean
+ * removal, when nothing would come back.
  */
-function clearedInOverride(unit: 'description' | 'location', instance: CalendarEventWire, master: CalendarEventWire): unknown {
+function clearedInOverride(unit: 'description' | 'location' | 'color', instance: CalendarEventWire, master: CalendarEventWire): unknown {
   if (unit === 'description') return typeof master.description === 'string' && master.description ? '' : null;
+  if (unit === 'color') return typeof master.color === 'string' && master.color ? '' : null;
   const series = Object.keys(master.locations ?? {});
   if (!series.length) return null;
   const key = Object.keys(instance.locations ?? {})[0] ?? series[0];

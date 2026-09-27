@@ -169,6 +169,11 @@ export function serverApply(event: CalendarEventWire, patch: PatchObject): Calen
       for (const forbidden of ['@type', 'method', 'organizerCalendarAddress', 'privacy', 'prodId', 'recurrenceId', 'recurrenceIdTimeZone', 'sentBy', 'uid', 'recurrenceRule', 'recurrenceOverrides']) {
         delete (value as Record<string, unknown>)[forbidden];
       }
+      // An override is stored as its own VEVENT: an empty map writes nothing, so it reads back without it.
+      for (const map of ['participants', 'alerts', 'locations']) {
+        const inner = (value as Record<string, unknown>)[map];
+        if (inner && typeof inner === 'object' && !Object.keys(inner).length) delete (value as Record<string, unknown>)[map];
+      }
     }
     if (!Object.keys(overrides).length) delete next.recurrenceOverrides;
   }

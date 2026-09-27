@@ -379,6 +379,53 @@ describe('calendar device edits through the engine', () => {
     expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
   });
 
+  describe('an occurrence\'s own colour and reminders removed on the device', () => {
+    async function standup(extra: Record<string, unknown>, override: Record<string, unknown>) {
+      const h = real();
+      const id = h.server.addEvent('a', {
+        uid: 'standup-uid',
+        title: 'Standup',
+        start: '2026-09-28T09:00:00',
+        duration: 'PT15M',
+        timeZone: 'Europe/Berlin',
+        recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', count: 5 },
+        recurrenceOverrides: { '2026-09-29T09:00:00': { title: 'Standup (late)', ...override } },
+        calendarIds: { [h.calendar]: true },
+        ...extra,
+      });
+      await h.run(CALENDAR_AUTHORITY);
+      const exception = () => h.events().find((e) => e[Events.ORIGINAL_SYNC_ID] === `a/${id}`)!;
+      const minutes = () => h.device.rows('reminders').filter((r) => Number(r[Reminders.EVENT_ID]) === Number(exception()._id)).map((r) => Number(r[Reminders.MINUTES]));
+      return { h, id, exception, minutes };
+    }
+
+    it('keeps a colour cleared on one occurrence cleared', async () => {
+      const { h, id, exception } = await standup({ color: 'steelblue' }, { color: 'red' });
+
+      h.device.user.updateEvent(Number(exception()._id), { [Events.EVENT_COLOR]: null });
+      expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+
+      expect(exception()).toMatchObject({ [Events.EVENT_COLOR]: null, [Events.DIRTY]: 0 });
+      expect((h.server.get('CalendarEvent', 'a', id)!.recurrenceOverrides as Overrides)['2026-09-29T09:00:00']).toMatchObject({ color: '' });
+    });
+
+    it('puts back the removal of every reminder of an occurrence whose series shows its own, and reports it', async () => {
+      const alert = { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M' }, action: 'display' };
+      const { h, id, exception, minutes } = await standup({ alerts: { al1: alert } }, {});
+      expect(minutes()).toEqual([15]);
+      const sets = () => h.server.requests.filter((r) => r.methods.includes('CalendarEvent/set')).length;
+      const before = sets();
+
+      h.device.user.setReminders(Number(exception()._id), []);
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${id}`, side: 'upload', type: 'remindersNotRepresentable' })]);
+      expect(sets()).toBe(before);
+      expect(minutes()).toEqual([15]);
+      expect(exception()[Events.DIRTY]).toBe(0);
+    });
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {

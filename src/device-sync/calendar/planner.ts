@@ -331,6 +331,11 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
       const ops = revertGroup(local, ctx);
       if (ops) return { kind: 'revert', ops, reason: SKIP.crossAccountMove };
     }
+    // Every reminder of an occurrence removed where the server can't store none: back to what it holds, reported.
+    if (computation.dropped.includes('reminders')) {
+      const ops = revertGroup(local, ctx);
+      if (ops) return { kind: 'revert', ops, reason: SKIP.remindersNotRepresentable };
+    }
     return { kind: 'clean', ops: cleanGroup(local, computation) };
   }
   const action: UploadAction<CalendarEventWire> = { kind: 'update', id: ref.id, patch: computation.patch };
