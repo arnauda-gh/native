@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { describeLoginError } from '../login-errors';
-import { PairingError, type PairingErrorReason } from '../oauth';
+import { PairingError, insecurePairingLinkError, type PairingErrorReason } from '../oauth';
 import { AccountLimitError } from '../account-utils';
 
 function named(name: string, message: string): Error {
@@ -29,6 +29,14 @@ describe('describeLoginError', () => {
     expect(describeLoginError(new AccountLimitError())).toEqual(want);
     // As the store keeps it: the message alone.
     expect(describeLoginError('Maximum of 10 accounts reached')).toEqual(want);
+  });
+
+  it('explains a scanned, pasted or tapped pairing link for a plain-http webmail', () => {
+    const link = `bulwarkmail://pair?server=${encodeURIComponent('http://webmail.example.org/mail')}&code=${'a1'.repeat(32)}`;
+    expect(describeLoginError(insecurePairingLinkError(link))).toEqual({
+      title: "This sign-in can't be trusted",
+      detail: 'webmail.example.org wants to use an unencrypted connection.',
+    });
   });
 
   it('names the host it could not reach', () => {

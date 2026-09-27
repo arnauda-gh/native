@@ -276,6 +276,47 @@ export function parseQrLoginPayload(raw: string): QrLoginPayload | null {
 }
 
 /**
+ * The code is redeemed at the webmail, and the answer carries credentials:
+ * only over TLS, or plain http on loopback for development.
+ */
+export function isInsecurePairingUrl(webmailUrl: string): boolean {
+  return !isHttpsUrl(webmailUrl) && !isLoopbackHttp(webmailUrl);
+}
+
+/**
+ * The host a sign-in link talks to, for the user to check. Read the way the
+ * network stack reads the address: `https://mail.example.com@evil.example`
+ * and `https://evil.example\@mail.example.com` both go to evil.example, so
+ * that is the host named.
+ */
+export function signInLinkHost(url: string): string {
+  const authority = url.trim().replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/\\?#]/)[0];
+  return authority.slice(authority.lastIndexOf('@') + 1).toLowerCase();
+}
+
+/**
+ * Why parseQrLoginPayload refused a pairing link, when the reason is its
+ * plain-http webmail (the code, and the credentials it buys, would cross the
+ * network in clear), so a scanned, pasted or tapped link can say so instead
+ * of "not a Bulwark sign-in code". Only ever an error to show: the parser
+ * stays the one gate and never yields such a link. Takes the link alone or
+ * pasted text around it; null for anything else.
+ */
+export function insecurePairingLinkError(text: string): PairingError | null {
+  const link = (/bulwarkmail:\/\/\S+/i.exec(text)?.[0] ?? '').replace(/[)\]>.,;'"]+$/, '');
+  const match = SIGN_IN_LINK_RE.exec(link);
+  if (!match || match[1].toLowerCase() !== 'pair') return null;
+  const params = new URLSearchParams(match[2]);
+  const server = params.get('server')?.trim();
+  const code = params.get('code')?.trim();
+  if (!server || !/^http:\/\/[^/?#\s]+/i.test(server) || !isInsecurePairingUrl(server)) return null;
+  if (!code || !PAIRING_CODE_RE.test(code)) return null;
+  return new PairingError('insecure', 'Pairing needs an https webmail address', {
+    host: signInLinkHost(server),
+  });
+}
+
+/**
  * Pasted text: the link on its own, or a message that contains it ("Open
  * bulwarkmail://pair?… on your phone"). Falls back to the whole text so a
  * pasted webmail address still works like a scanned one.
@@ -340,6 +381,10 @@ function redeemFailure(status: number, body: Record<string, unknown> | null, hos
 export async function redeemPairingCode(webmailUrl: string, code: string): Promise<HandoffResult> {
   const base = webmailUrl.replace(/\/+$/, '');
   const host = displayHost(base);
+  // The login screen refuses these links already; never send a code in clear.
+  if (isInsecurePairingUrl(base)) {
+    throw new PairingError('insecure', 'Pairing needs an https webmail address', { host });
+  }
 
   // secureFetch's native (client-certificate) path ignores `signal`, so the
   // deadline is also passed as `timeoutMs` and enforced here with a race; the

@@ -1,12 +1,17 @@
 import React from 'react';
-import { BackHandler } from 'react-native';
+import { Alert, BackHandler } from 'react-native';
 import { useAuthStore } from '../stores/auth-store';
 import { useAccountStore } from '../stores/account-store';
-import { useLocaleStore } from '../stores/locale-store';
+import { useLocaleStore, type TranslateFn } from '../stores/locale-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { QrScanModal } from '../components/QrScanModal';
 import { PasteSignInLinkModal } from '../components/PasteSignInLinkModal';
-import { parseQrLoginPayload, type QrLoginPayload } from '../lib/oauth';
+import {
+  insecurePairingLinkError,
+  parseQrLoginPayload,
+  signInLinkHost,
+  type QrLoginPayload,
+} from '../lib/oauth';
 import { usePendingSignInLinkStore } from '../navigation/pending-sign-in-link';
 import {
   discoverServerForEmail,
@@ -32,6 +37,31 @@ interface LoginScreenProps {
 type StepName = 'choose' | 'email' | 'server' | 'confirm' | 'password';
 
 const RECENT_EMAILS_KEY = 'login:recentEmails:v1';
+
+// The question asked before running a sign-in link from outside the app:
+// which webmail it talks to, and whether it adds an account (and switches to
+// it) or signs in.
+function signInLinkConfirmation(
+  payload: QrLoginPayload,
+  isAddMode: boolean,
+  t: TranslateFn,
+): { title: string; message: string } {
+  const host = signInLinkHost(payload.webmailUrl);
+  if (payload.kind === 'connect') {
+    return {
+      title: t('login.mobile.link_confirm_connect_title', 'Open the sign-in page of {host}?', { host }),
+      message: isAddMode
+        ? t('login.mobile.link_confirm_connect_add', 'A link asks to add an account by signing in on this page. Only continue if you use {host} for your mail.', { host })
+        : t('login.mobile.link_confirm_connect', 'A link asks to sign in on this page. Only continue if you use {host} for your mail.', { host }),
+    };
+  }
+  return {
+    title: t('login.mobile.link_confirm_title', 'Sign in with a link?'),
+    message: isAddMode
+      ? t('login.mobile.link_confirm_pair_add', 'This link adds an account from {host} and switches the app to it. Only continue if you just showed a sign-in code on your computer.', { host })
+      : t('login.mobile.link_confirm_pair', 'This link signs in to an account from {host}. Only continue if you just showed a sign-in code on your computer.', { host }),
+  };
+}
 
 /**
  * Sign-in, one question per screen, cheapest question first.
@@ -334,6 +364,12 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
       setScannerVisible(false);
       const payload = parseQrLoginPayload(data);
       if (!payload) {
+        // A pairing code for a plain-http webmail: say why it won't be used.
+        const insecure = insecurePairingLinkError(data);
+        if (insecure) {
+          setNotice(describeLoginError(insecure, { t }));
+          return;
+        }
         setNotice({
           title: t('login.mobile.notice_bad_qr', "That code isn't a Bulwark sign-in code"),
           detail: t('login.mobile.notice_bad_qr_detail', 'Open Bulwark on the web, then Settings → Security → Link Mobile App to show one.'),
@@ -345,14 +381,84 @@ export default function LoginScreen({ onLogin, isAddMode = false, onCancel }: Lo
     [handleSignInLink, t],
   );
 
-  // A tapped sign-in link is parked by App until a login screen is free to
-  // run it; taking it clears it, so one link signs in once.
-  const signInLinkPending = usePendingSignInLinkStore((s) => s.payload !== null);
+  // A sign-in link from outside the app (a tapped link, or one another app
+  // fired) is parked by App until a login screen is free to take it; taking
+  // clears it, so one link runs once. Whoever sent it chose the webmail and
+  // the code, so the user confirms first: nothing is redeemed or opened
+  // before Continue, and Cancel (or dismissing the dialog) forgets the link.
+  // Scanned and pasted links skip this: they call handleSignInLink directly.
+  const signInLinkPending = usePendingSignInLinkStore((s) => s.pending !== null);
+  // The dialog answers after later renders; run the current callbacks.
+  const latestRef = React.useRef({ handleSignInLink, onCancel });
+  React.useEffect(() => {
+    latestRef.current = { handleSignInLink, onCancel };
+  }, [handleSignInLink, onCancel]);
+  const mountedRef = React.useRef(false);
+  const confirmingLinkIdRef = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      // Gone while the dialog is up: forget its link, so a late Continue runs
+      // nothing and later links are not dropped as "dialog open". Checked a
+      // tick later, as a StrictMode rehearsal remounts straight away.
+      setTimeout(() => {
+        const id = confirmingLinkIdRef.current;
+        if (!mountedRef.current && id !== null) usePendingSignInLinkStore.getState().discard(id);
+      }, 0);
+    };
+  }, []);
   React.useEffect(() => {
     if (!signInLinkPending || busy || searching) return;
-    const payload = usePendingSignInLinkStore.getState().take();
-    if (payload) void handleSignInLink(payload);
-  }, [busy, handleSignInLink, searching, signInLinkPending]);
+    const taken = usePendingSignInLinkStore.getState().take();
+    if (!taken) return;
+    if (!taken.needsConfirmation) {
+      void handleSignInLink(taken.payload);
+      return;
+    }
+    // Add account opened for this link closes again on Cancel; one the user
+    // was already working through stays where it was.
+    const leaveOnCancel = isAddMode && history.length === 0;
+    confirmingLinkIdRef.current = taken.id;
+    let answered = false;
+    const answer = (proceed: boolean) => {
+      if (answered) return;
+      answered = true;
+      confirmingLinkIdRef.current = null;
+      const store = usePendingSignInLinkStore.getState();
+      if (!mountedRef.current) {
+        store.discard(taken.id);
+        return;
+      }
+      if (proceed) {
+        // Only the link this dialog named, and only if it is still waiting.
+        const payload = store.confirm(taken.id);
+        if (payload) void latestRef.current.handleSignInLink(payload);
+        return;
+      }
+      if (store.discard(taken.id) && leaveOnCancel) latestRef.current.onCancel?.();
+    };
+    const { title, message } = signInLinkConfirmation(taken.payload, isAddMode, t);
+    Alert.alert(
+      title,
+      message,
+      [
+        { text: t('common.cancel', 'Cancel'), style: 'cancel', onPress: () => answer(false) },
+        { text: t('login.mobile.continue', 'Continue'), onPress: () => answer(true) },
+      ],
+      // Android back or a tap outside the dialog counts as Cancel.
+      { cancelable: true, onDismiss: () => answer(false) },
+    );
+  }, [busy, handleSignInLink, history.length, isAddMode, searching, signInLinkPending, t]);
+
+  // A tapped link that is refused outright (a pairing code for a plain-http
+  // webmail) ran nothing; say why, as for a scanned one.
+  const signInLinkRefused = usePendingSignInLinkStore((s) => s.refusal !== null);
+  React.useEffect(() => {
+    if (!signInLinkRefused || busy || searching) return;
+    const refusal = usePendingSignInLinkStore.getState().takeRefusal();
+    if (refusal) setNotice(describeLoginError(refusal, { t }));
+  }, [busy, searching, signInLinkRefused, t]);
 
   // ── render ─────────────────────────────────────────────
 

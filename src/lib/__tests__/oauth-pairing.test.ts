@@ -12,10 +12,13 @@ import {
   PAIRING_REDEEM_TIMEOUT_MS,
   PairingError,
   TransientRefreshError,
+  insecurePairingLinkError,
+  isInsecurePairingUrl,
   parsePastedSignInLink,
   parseQrLoginPayload,
   redeemPairingCode,
   refreshOAuthAccessToken,
+  signInLinkHost,
 } from '../oauth';
 
 const CODE = 'a1'.repeat(32);
@@ -110,6 +113,64 @@ describe('parsePastedSignInLink', () => {
   });
 });
 
+describe('insecurePairingLinkError', () => {
+  const httpLink = `bulwarkmail://pair?server=${encodeURIComponent('http://Mail.Example.com:8080/webmail')}&code=${CODE}`;
+
+  it('says why a pairing link for a plain-http webmail is refused', () => {
+    // Still refused by the parser: nothing can redeem it.
+    expect(parseQrLoginPayload(httpLink)).toBeNull();
+    expect(parsePastedSignInLink(`Open ${httpLink} on your phone.`)).toBeNull();
+
+    for (const text of [httpLink, `Open ${httpLink}.`, `bulwarkmail://pair/?code=${CODE}&server=http://mail.example.com:8080`]) {
+      const err = insecurePairingLinkError(text);
+      expect(err).toBeInstanceOf(PairingError);
+      expect(err).toMatchObject({ reason: 'insecure', host: 'mail.example.com:8080' });
+    }
+  });
+
+  it('names the host the code would really go to', () => {
+    const spoof = `bulwarkmail://pair?server=${encodeURIComponent('http://webmail.example.org@attacker.example')}&code=${CODE}`;
+    expect(insecurePairingLinkError(spoof)).toMatchObject({ host: 'attacker.example' });
+  });
+
+  it('is null for links that are fine or broken for another reason', () => {
+    expect(insecurePairingLinkError(`bulwarkmail://pair?server=${encodeURIComponent(WEBMAIL)}&code=${CODE}`)).toBeNull();
+    expect(insecurePairingLinkError(`bulwarkmail://pair?server=http%3A%2F%2Flocalhost%3A3000&code=${CODE}`)).toBeNull();
+    expect(insecurePairingLinkError('bulwarkmail://pair?server=http://mail.example.com&code=has%20space')).toBeNull();
+    expect(insecurePairingLinkError('bulwarkmail://pair?server=http://mail.example.com')).toBeNull();
+    expect(insecurePairingLinkError('bulwarkmail://connect?server=http://mail.example.com')).toBeNull();
+    expect(insecurePairingLinkError(`bulwarkmail://pair?server=ftp://mail.example.com&code=${CODE}`)).toBeNull();
+    expect(insecurePairingLinkError('http://mail.example.com')).toBeNull();
+    expect(insecurePairingLinkError('')).toBeNull();
+  });
+});
+
+describe('isInsecurePairingUrl', () => {
+  it('allows https and loopback http only', () => {
+    expect(isInsecurePairingUrl('https://mail.example.com')).toBe(false);
+    expect(isInsecurePairingUrl('http://localhost:3000')).toBe(false);
+    expect(isInsecurePairingUrl('http://10.0.2.2:3000')).toBe(false);
+    expect(isInsecurePairingUrl('http://mail.example.com')).toBe(true);
+    expect(isInsecurePairingUrl('http://192.168.1.5:3000')).toBe(true);
+  });
+});
+
+describe('signInLinkHost', () => {
+  it('names the host the link talks to', () => {
+    expect(signInLinkHost('https://mail.example.com/webmail')).toBe('mail.example.com');
+    expect(signInLinkHost('https://Mail.Example.com:8443')).toBe('mail.example.com:8443');
+    expect(signInLinkHost('http://127.0.0.1:3000/?x=1')).toBe('127.0.0.1:3000');
+  });
+
+  it('is not fooled by user info or backslashes', () => {
+    expect(signInLinkHost('https://mail.example.com@attacker.example/webmail')).toBe('attacker.example');
+    expect(signInLinkHost('https://a@mail.example.com@attacker.example')).toBe('attacker.example');
+    expect(signInLinkHost('https://attacker.example\\@mail.example.com')).toBe('attacker.example');
+    expect(signInLinkHost('https://attacker.example#@mail.example.com')).toBe('attacker.example');
+    expect(signInLinkHost('https://attacker.example?@mail.example.com')).toBe('attacker.example');
+  });
+});
+
 describe('redeemPairingCode', () => {
   it('posts the code to the webmail and returns an OAuth bundle for its token proxy', async () => {
     mockSecureFetch.mockResolvedValueOnce(json(200, {
@@ -182,6 +243,12 @@ describe('redeemPairingCode', () => {
       flow: 'password', server_url: 'http://10.0.2.2:8080', username: 'u', password: 'p',
     }));
     await expect(redeemPairingCode('http://10.0.2.2:3000', CODE)).resolves.toMatchObject({ serverUrl: 'http://10.0.2.2:8080' });
+  });
+
+  it('never sends a code to a plain-http webmail', async () => {
+    await expect(redeemPairingCode('http://webmail.example.org/mail', CODE))
+      .rejects.toMatchObject({ name: 'PairingError', reason: 'insecure', host: 'webmail.example.org' });
+    expect(mockSecureFetch).not.toHaveBeenCalled();
   });
 
   it('tells an unknown code from an expired or a used one', async () => {

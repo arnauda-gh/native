@@ -9,8 +9,9 @@ import type { RootStackParamList } from './types';
 import { setPendingSettingsTab } from './pending-settings-tab';
 import { setPendingCalendarOpen } from './pending-calendar-open';
 import { setPendingMailSearch } from './pending-mail-search';
-import { setPendingSignInLink } from './pending-sign-in-link';
-import { parseQrLoginPayload, type QrLoginPayload } from '../lib/oauth';
+import { setPendingSignInLink, usePendingSignInLinkStore } from './pending-sign-in-link';
+import { insecurePairingLinkError, parseQrLoginPayload, type QrLoginPayload } from '../lib/oauth';
+import { MAX_ACCOUNTS } from '../lib/account-utils';
 
 export const APP_SCHEME = 'bulwarkmobile';
 // The webmail's "Link Mobile App" links (`bulwarkmail://pair?server=…&code=…`)
@@ -184,15 +185,39 @@ export function parseSignInLink(url: string | null | undefined): QrLoginPayload 
 }
 
 /**
- * Park a tapped sign-in link for the login screen, which takes it (the
- * signed-out one, or Add account when someone is signed in). Returns whether
- * `url` was one.
+ * Park a sign-in link the OS delivered (a tapped link, or another app firing
+ * the intent) for the login screen, which takes it (the signed-out one, or
+ * Add account when someone is signed in) and asks the user before running
+ * it: whoever sent it chose the webmail and the code. A pairing link for a
+ * plain-http webmail is parked as a refusal instead, for the login screen to
+ * say why nothing happens. Returns whether `url` was a sign-in link.
  */
 export function acceptSignInLink(url: string | null | undefined): boolean {
   const payload = parseSignInLink(url);
-  if (!payload) return false;
-  setPendingSignInLink(payload);
+  if (payload) {
+    setPendingSignInLink(payload, 'external');
+    return true;
+  }
+  const refusal = url && isSignInSchemeUrl(url) ? insecurePairingLinkError(url) : null;
+  if (!refusal) return false;
+  usePendingSignInLinkStore.getState().refuse(refusal);
   return true;
+}
+
+/**
+ * Signed in, where a parked sign-in link goes: Add account, whose login
+ * screen takes it, or, with no room for another account, nowhere: the link
+ * is dropped before a code is spent and the caller shows the limit. 'none'
+ * when nothing is parked (taken meanwhile by an Add account already open).
+ */
+export function routeParkedSignInLink(accountCount: number): 'add-account' | 'account-limit' | 'none' {
+  const links = usePendingSignInLinkStore.getState();
+  if (!links.pending && !links.refusal) return 'none';
+  if (accountCount >= MAX_ACCOUNTS) {
+    links.dropParked();
+    return 'account-limit';
+  }
+  return 'add-account';
 }
 
 export interface DeepLinkNavigator {

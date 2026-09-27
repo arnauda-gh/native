@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { acceptSignInLink, handleDeepLink, parseDeepLink, parseSignInLink, shareToDeepLink } from '../linking';
-import { setPendingSignInLink, usePendingSignInLinkStore } from '../pending-sign-in-link';
+import { usePendingSignInLinkStore } from '../pending-sign-in-link';
 import { usePendingSettingsTab } from '../pending-settings-tab';
 import { usePendingCalendarOpen } from '../pending-calendar-open';
 import { usePendingMailSearch } from '../pending-mail-search';
@@ -284,18 +284,35 @@ describe('sign-in links', () => {
     expect(parseSignInLink(null)).toBeNull();
   });
 
-  it('parks a sign-in link for the login screen, which takes it once', () => {
-    setPendingSignInLink(null);
+  it('parks a sign-in link from the OS as external, for the login screen to take once', () => {
+    usePendingSignInLinkStore.getState().clear();
     expect(acceptSignInLink('bulwarkmobile://mail')).toBe(false);
     expect(acceptSignInLink('mailto:a@b.co')).toBe(false);
-    expect(usePendingSignInLinkStore.getState().payload).toBeNull();
+    expect(usePendingSignInLinkStore.getState().pending).toBeNull();
 
     expect(acceptSignInLink(pair)).toBe(true);
-    expect(usePendingSignInLinkStore.getState().take()).toEqual({
-      kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code,
+    expect(usePendingSignInLinkStore.getState().pending).toMatchObject({
+      source: 'external',
+      payload: { kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code },
+    });
+    // Anyone can fire the link, so it is not run until the user confirms.
+    expect(usePendingSignInLinkStore.getState().take()).toMatchObject({
+      needsConfirmation: true,
+      payload: { kind: 'pair', webmailUrl: 'https://mail.example.com/webmail', code },
     });
     // Taken means cleared: a second delivery of the same state signs in nothing.
-    expect(usePendingSignInLinkStore.getState().payload).toBeNull();
+    expect(usePendingSignInLinkStore.getState().pending).toBeNull();
     expect(usePendingSignInLinkStore.getState().take()).toBeNull();
+    usePendingSignInLinkStore.getState().clear();
+  });
+
+  it('parks connect links as external too', () => {
+    usePendingSignInLinkStore.getState().clear();
+    expect(acceptSignInLink('bulwarkmail://connect?server=https%3A%2F%2Fmail.example.com')).toBe(true);
+    expect(usePendingSignInLinkStore.getState().take()).toMatchObject({
+      needsConfirmation: true,
+      payload: { kind: 'connect', webmailUrl: 'https://mail.example.com' },
+    });
+    usePendingSignInLinkStore.getState().clear();
   });
 });

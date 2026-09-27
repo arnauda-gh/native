@@ -73,8 +73,16 @@ import { AppIconBadge } from './src/components/AppIconBadge';
 import { getEmails } from './src/api/email';
 import { signOutWidgets, startWidgetSync } from './src/widgets/sync';
 import { draftContextFromEmail } from './src/lib/draft-context';
-import { acceptSignInLink, handleDeepLink, parseDeepLink, shareToDeepLink, type DeepLink } from './src/navigation/linking';
+import {
+  acceptSignInLink,
+  handleDeepLink,
+  parseDeepLink,
+  routeParkedSignInLink,
+  shareToDeepLink,
+  type DeepLink,
+} from './src/navigation/linking';
 import { usePendingSignInLinkStore } from './src/navigation/pending-sign-in-link';
+import { MAX_ACCOUNTS } from './src/lib/account-utils';
 import { addShareListener, getInitialShare, shareAttachments } from './src/lib/share-intent';
 import { OfflineCacheBanner } from './src/components/OfflineCacheBanner';
 import { useOfflineCacheStore } from './src/stores/offline-cache-store';
@@ -573,8 +581,10 @@ export default function App() {
 
   // Sign-in links (`bulwarkmail://pair?…` from the webmail's Link Mobile App,
   // `bulwarkmail://connect?…`) work signed out too, so unlike the links above
-  // they are listened for from launch. They are parked for the login screen:
-  // the signed-out one takes them as it mounts.
+  // they are listened for from launch. They are parked for the login screen
+  // (the signed-out one takes them as it mounts), marked as coming from
+  // outside the app: any page or app can fire one, so the login screen asks
+  // before it redeems or opens anything.
   React.useEffect(() => {
     if (!initialSignInLinkRead) {
       initialSignInLinkRead = true;
@@ -585,9 +595,10 @@ export default function App() {
   }, []);
 
   // Signed in, a sign-in link adds an account: open Add account, whose login
-  // screen takes the parked link. On a cold start the navigator mounts right
-  // after the auth gate flips, so wait for it like a reminder tap does.
-  const signInLinkPending = usePendingSignInLinkStore((s) => s.payload !== null);
+  // screen takes the parked link (or says why a refused one won't be used).
+  // On a cold start the navigator mounts right after the auth gate flips, so
+  // wait for it like a reminder tap does.
+  const signInLinkPending = usePendingSignInLinkStore((s) => s.pending !== null || s.refusal !== null);
   const addAccountForLink = isAuthenticated && signInLinkPending;
   React.useEffect(() => {
     if (!addAccountForLink) return;
@@ -598,9 +609,18 @@ export default function App() {
         if (cancelled) return;
       }
       if (cancelled || !navigationRef.isReady()) return;
-      // Taken meanwhile (Add account was already open).
-      if (!usePendingSignInLinkStore.getState().payload) return;
-      navigationRef.navigate('AddAccount');
+      const route = routeParkedSignInLink(useAccountStore.getState().accounts.length);
+      if (route === 'account-limit') {
+        // Said like the Add account buttons say it, instead of opening a
+        // screen whose sign-in can only fail.
+        const t = useLocaleStore.getState().t;
+        toast.error(
+          t('settings.account.accounts.limit', 'Maximum of {count} accounts reached.', { count: MAX_ACCOUNTS }),
+          t('login.mobile.err_account_limit_detail', 'Remove an account in Settings to add another one.'),
+        );
+        return;
+      }
+      if (route === 'add-account') navigationRef.navigate('AddAccount');
     })();
     return () => { cancelled = true; };
   }, [addAccountForLink]);

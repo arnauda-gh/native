@@ -17,7 +17,8 @@ import { spacing, radius, typography, type ThemePalette } from '../theme/tokens'
 import { useColors } from '../theme/colors';
 import Button from './Button';
 import { useLocaleStore } from '../stores/locale-store';
-import { parsePastedSignInLink, type QrLoginPayload } from '../lib/oauth';
+import { insecurePairingLinkError, parsePastedSignInLink, type QrLoginPayload } from '../lib/oauth';
+import { describeLoginError } from '../lib/login-errors';
 
 interface PasteSignInLinkModalProps {
   visible: boolean;
@@ -63,6 +64,13 @@ export function PasteSignInLinkModal({ visible, onClose, onSubmit }: PasteSignIn
   const submit = React.useCallback(() => {
     const payload = parsePastedSignInLink(text);
     if (!payload) {
+      // A pairing link for a plain-http webmail: say why it won't be used.
+      const insecure = insecurePairingLinkError(text);
+      if (insecure) {
+        const copy = describeLoginError(insecure, { t });
+        setError(copy.detail ?? copy.title);
+        return;
+      }
       setError(t('login.mobile.paste_invalid', "That isn't a Bulwark sign-in link"));
       return;
     }
