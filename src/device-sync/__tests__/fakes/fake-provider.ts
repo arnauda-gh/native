@@ -98,7 +98,7 @@ const COLUMNS: Record<ProviderTable, Set<string>> = {
   data: new Set([...Object.values(Data), GroupMembership.GROUP_SOURCE_ID]),
   groups: new Set([...Object.values(Groups), 'auto_add', 'favorites']),
   settings: new Set(Object.values(ContactsSettings)),
-  calendars: new Set([...Object.values(Calendars), ...numbered('cal_sync', 4, 10), 'canPartiallyUpdate']),
+  calendars: new Set([...Object.values(Calendars), ...numbered('cal_sync', 4, 10)]),
   events: new Set([...Object.values(Events), ...numbered('sync_data', 7, 10), 'lastSynced']),
   attendees: new Set(Object.values(Attendees)),
   reminders: new Set(Object.values(Reminders)),

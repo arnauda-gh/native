@@ -231,6 +231,8 @@ export const Calendars = {
   MAX_REMINDERS: 'maxReminders',
   CAN_ORGANIZER_RESPOND: 'canOrganizerRespond',
   CAN_MODIFY_TIME_ZONE: 'canModifyTimeZone',
+  /** Must stay 0: with 1 the provider keeps a LAST_SYNCED copy of every event an app edits. */
+  CAN_PARTIALLY_UPDATE: 'canPartiallyUpdate',
   IS_PRIMARY: 'isPrimary',
   CAL_SYNC1: 'cal_sync1',
   CAL_SYNC2: 'cal_sync2',
