@@ -23,6 +23,12 @@
  * A group whose rows the SyncState describes (a group row: `groups`) carries
  * that `state` change: every batch that applies such a group, a retry
  * included, ends with a state op holding it.
+ *
+ * An item too big for one transaction comes as a chain (`OpGroup.next`): its
+ * groups go in order, each in a batch of its own, between the batches of the
+ * works before and after it; its `state` and `applied` go with the last. A
+ * group of the chain that fails leaves the earlier ones written: after an
+ * assert the item is read and planned again from them, else it is given up.
  */
 import type { OpGroup } from '../planner';
 import type { BatchFailure, OpResult, ProviderOp, ProviderPort } from '../types';
@@ -67,6 +73,17 @@ export function estimateBatchBytes(ops: readonly ProviderOp[]): number {
   return 2 * JSON.stringify(ops).length + 300 * ops.length;
 }
 
+/** A group and the groups of its item that follow it (`next`), each without `next`. */
+export function chainOf(group: OpGroup): OpGroup[] {
+  const { next, ...first } = group;
+  return [first, ...(next ?? [])];
+}
+
+/** Whether a group, or one of the groups after it, writes anything. */
+export function chainHasWrites(group: OpGroup): boolean {
+  return chainOf(group).some((g) => hasWrites(g.ops));
+}
+
 function carriesBlob(ops: readonly ProviderOp[]): boolean {
   return ops.some(
     (op) =>
@@ -100,17 +117,28 @@ export function buildBatch(groups: readonly OpGroup[], tailOp?: ProviderOp): Pro
   return out;
 }
 
-/** Prepends ops to a group (e.g. an engine-side assert), shifting the group's refs. */
+/** Prepends ops to a group (e.g. an engine-side assert), shifting the group's refs; the groups after it stay. */
 export function prependOps(group: OpGroup, ops: ProviderOp[]): OpGroup {
-  return { ref: group.ref, ops: [...ops, ...placeGroup(group.ops, ops.length).map(stripYield)] };
+  return { ...group, ops: [...ops, ...placeGroup(group.ops, ops.length).map(stripYield)] };
 }
 
-/** One group running `first` then `second` atomically. */
+/** One group running `first` then `second` atomically (then the groups after `second`). */
 export function concatGroups(ref: string, first: OpGroup, second: OpGroup): OpGroup {
   return {
     ref,
     ops: [...first.ops.map(stripYield), ...placeGroup(second.ops, first.ops.length).map(stripYield)],
+    ...(second.next ? { next: second.next } : {}),
   };
+}
+
+/** Appends ops to the last group of a chain (e.g. clearing a poison marker once the item is written). */
+export function appendToLast(group: OpGroup, ops: ProviderOp[]): OpGroup {
+  if (!ops.length) return group;
+  if (!group.next?.length) return { ...group, ops: [...group.ops, ...ops] };
+  const next = [...group.next];
+  const last = next[next.length - 1];
+  next[next.length - 1] = { ...last, ops: [...last.ops, ...ops] };
+  return { ...group, next };
 }
 
 function stripYield(op: ProviderOp): ProviderOp {
@@ -134,7 +162,22 @@ export class BatchWriter {
    * every group of `works` was applied or given up.
    */
   async write(works: readonly Work[], tail?: Tail): Promise<void> {
-    const todo = works.filter((w) => hasWrites(w.group.ops));
+    let run: Work[] = [];
+    for (const work of works) {
+      if (!chainHasWrites(work.group)) continue;
+      if (!work.group.next?.length) {
+        run.push(work);
+        continue;
+      }
+      await this.writeRun(run);
+      run = [];
+      await this.applyChain(work, 0);
+    }
+    await this.writeRun(run, tail);
+  }
+
+  /** Works of one group each, packed into batches. */
+  private async writeRun(todo: readonly Work[], tail?: Tail): Promise<void> {
     const batches = this.pack(todo);
     if (batches.length === 0) {
       if (tail) await this.applyTail(tail);
@@ -243,7 +286,37 @@ export class BatchWriter {
     if (tail) await this.applyTail(tail);
   }
 
+  /**
+   * An item's chain of groups, each in a batch of its own and so committed
+   * whole or not at all; the item's state and `applied` go with the last.
+   */
+  private async applyChain(work: Work, attempt: number): Promise<void> {
+    const groups = chainOf(work.group).filter((g) => hasWrites(g.ops));
+    const results: OpResult[] = [];
+    for (let i = 0; i < groups.length; i++) {
+      const last = i === groups.length - 1;
+      const stated = last ? this.stage([work]) : { staged: [], tail: undefined };
+      let result;
+      try {
+        result = await this.send(buildBatch([groups[i]], stated.tail?.op()));
+      } finally {
+        this.unstage(stated.staged);
+      }
+      if (!result.ok) {
+        // The groups before it are written: planned again from them, never sent again as they are.
+        await this.retryAlone(work, result.reason, result.message, attempt);
+        return;
+      }
+      results.push(...result.results.slice(0, groups[i].ops.length));
+      if (last) {
+        await work.applied?.(results);
+        stated.tail?.applied();
+      }
+    }
+  }
+
   private async applyAlone(work: Work, attempt: number): Promise<void> {
+    if (work.group.next?.length) return this.applyChain(work, attempt);
     if (!hasWrites(work.group.ops)) return;
     const stated = this.stage([work]);
     let result;

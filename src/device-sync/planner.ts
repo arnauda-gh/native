@@ -25,6 +25,15 @@ export interface OpGroup {
   /** For logs and reports: SOURCE_ID/_SYNC_ID or `row:<_id>`. */
   ref: string;
   ops: ProviderOp[];
+  /**
+   * Further groups of the same item, for one too big for a provider
+   * transaction (a big meeting): the engine applies `[this, ...next]` in
+   * order, each atomically in a batch of its own, and counts the item once
+   * the last one is in. When one fails, the item is read and planned again
+   * from what the earlier ones wrote, so a planner orders them for that: a
+   * new row's identity first, a master's shadow last. They have no `next`.
+   */
+  next?: OpGroup[];
 }
 
 /** Why an item is left alone, with the fingerprint that lifts the back-off when the item changes. */

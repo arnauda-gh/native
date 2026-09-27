@@ -16,7 +16,7 @@ import {
   type SetResponse,
 } from '../jmap/caller';
 import { isMethodError } from '../jmap/errors';
-import { concatGroups, prependOps, type Work } from './batch';
+import { appendToLast, chainHasWrites, concatGroups, prependOps, type Work } from './batch';
 import type { RunEnv } from './context';
 import { RunAbort, StateMismatch } from './errors';
 import {
@@ -687,7 +687,7 @@ export abstract class ItemSync {
   ): Work | null {
     const ref = refOf(acct, object.id);
     const plan = kind.planDownload(object, local ?? null, acct);
-    if (plan.effect === 'none' || !hasWrites(plan.ops.ops)) {
+    if (plan.effect === 'none' || !chainHasWrites(plan.ops)) {
       if (local) this.onEcho(kind, acct, object);
       if (!local || kind.meta(local).dirty) return null;
       const heal = kind.planBaselineHeal(local);
@@ -1405,7 +1405,8 @@ export abstract class ItemSync {
     const { kind, local } = p.held;
     const plan = kind.planAccepted(local, server, acct);
     const extra = p.meta.poison ? [poisonOp(kind, p.meta.rowId, null)] : [];
-    const withExtra = (group: OpGroup): OpGroup => (extra.length ? { ref: group.ref, ops: [...group.ops, ...extra] } : group);
+    // With the item's last group: a big one comes in several (OpGroup.next).
+    const withExtra = (group: OpGroup): OpGroup => appendToLast(group, extra);
     const counted = () => {
       if (created) this.env.report.stats.uploaded.created++;
       else this.env.report.stats.uploaded.updated++;

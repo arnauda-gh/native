@@ -14,6 +14,8 @@ import type { EventBaseline, LocalEventRow, OpGroup, PendingCreate, PoisonMarker
 import type { ProviderOp, Row, WriteRow } from '../types';
 import type { CalendarEventWire } from '../wire';
 import { deepEqual } from '../common/json';
+import { MAX_OPS_PER_YIELD, estimateBatchBytes } from '../engine/batch';
+import { DEFAULT_TUNING } from '../engine/deps';
 import { ATTENDEE_CELLS, MASTER_CELLS, EXCEPTION_CELLS, REMINDER_CELLS, encodeBaseline, sameCell } from './columns';
 import { rowReminder } from './reminders';
 
@@ -245,7 +247,144 @@ function writeReminders(group: GroupBuilder, current: LocalEventRow, wanted: Row
   for (const add of inserts) group.write({ op: 'insert', table: 'reminders', values: { ...add, [Reminders.EVENT_ID]: current.eventId } });
 }
 
-/** Counts the provider writes of a group (asserts are not writes). */
+/** Counts the provider writes of a group and the groups after it (asserts are not writes). */
 export function writesOf(group: OpGroup): number {
-  return group.ops.filter((op) => op.op === 'insert' || op.op === 'update' || op.op === 'delete').length;
+  return [group, ...(group.next ?? [])].reduce(
+    (n, g) => n + g.ops.filter((op) => op.op === 'insert' || op.op === 'update' || op.op === 'delete').length,
+    0,
+  );
+}
+
+// ─── Items too big for one group ────────────────────────
+
+/**
+ * What one group may hold: the engine's batch budget as `estimateBatchBytes`
+ * weighs it, and one op less than a provider yield window (room for the
+ * engine's insert guard). A bigger event is written as a chain of groups
+ * (`OpGroup.next`); a master's shadow is one column and may take a group of
+ * its own beyond the budget (under one transaction for any event that syncs).
+ */
+const GROUP_BYTES = DEFAULT_TUNING.maxBatchBytes;
+const GROUP_OPS = MAX_OPS_PER_YIELD - 1;
+
+const weight = (ops: readonly ProviderOp[]) => (ops.length ? estimateBatchBytes(ops) : 0);
+
+/** One group from asserts and write blocks whose `refs` index into their own block, asserts first. */
+function assemble(ref: string, asserts: readonly ProviderOp[], blocks: ReadonlyArray<readonly ProviderOp[]>): OpGroup {
+  const ops: ProviderOp[] = [...asserts];
+  for (const block of blocks) {
+    const offset = ops.length;
+    for (const op of block) {
+      if (op.op !== 'insert' || !op.refs) ops.push(op);
+      else ops.push({ ...op, refs: Object.fromEntries(Object.entries(op.refs).map(([column, i]) => [column, i + offset])) });
+    }
+  }
+  return { ref, ops };
+}
+
+/** Writes of one row (`refs` index into them), and the asserts that guard that row (none for a new row). */
+export interface RowWrite {
+  asserts: ProviderOp[];
+  writes: ProviderOp[];
+}
+
+/**
+ * Cuts row writes into groups of the budget, in order, a row never split:
+ * each group starts with `guard`, the first also with `first`.
+ */
+function cutRows(ref: string, rows: readonly RowWrite[], guard: readonly ProviderOp[], first: readonly ProviderOp[] = []): OpGroup[] {
+  const groups: OpGroup[] = [];
+  let asserts: ProviderOp[] = [...guard, ...first];
+  let blocks: ProviderOp[][] = [];
+  let ops = asserts.length;
+  let bytes = weight(asserts);
+  for (const row of rows) {
+    const n = row.asserts.length + row.writes.length;
+    const b = weight(row.asserts) + weight(row.writes);
+    if (blocks.length && (ops + n > GROUP_OPS || bytes + b > GROUP_BYTES)) {
+      groups.push(assemble(ref, asserts, blocks));
+      asserts = [...guard];
+      blocks = [];
+      ops = asserts.length;
+      bytes = weight(asserts);
+    }
+    asserts.push(...row.asserts);
+    blocks.push(row.writes);
+    ops += n;
+    bytes += b;
+  }
+  if (blocks.length) groups.push(assemble(ref, asserts, blocks));
+  return groups;
+}
+
+function chained(groups: readonly OpGroup[]): OpGroup {
+  const [first, ...next] = groups;
+  return next.length ? { ...first, next } : first;
+}
+
+/**
+ * The writes into an existing event as one group: asserts first (`master`,
+ * the exception rows' `rows` in order, `count`), then the writes (`deletes`,
+ * the master's `master`, `updates`, `inserts`). When that is more than a group
+ * may hold, a chain: the exception rows' writes in groups of the budget, each
+ * asserting the master row and the rows it writes, the first also the number
+ * of exception rows; then the master's write, with its new shadow, last,
+ * asserting the other rows. Cut off in between, the item is planned again
+ * from the old shadow, so no server change to a row not written yet is taken
+ * as done.
+ */
+export function eventWrite(
+  ref: string,
+  parts: {
+    master: ProviderOp[];
+    rows: Map<number, ProviderOp[]>;
+    count: ProviderOp[];
+    deletes: Array<RowWrite & { row: number }>;
+    masterWrite: ProviderOp[];
+    updates: Array<RowWrite & { row: number }>;
+    inserts: RowWrite[];
+  },
+): OpGroup {
+  const rowAsserts = [...parts.rows.values()].flat();
+  const single = assemble(ref, [...parts.master, ...rowAsserts, ...parts.count], [
+    ...parts.deletes.map((d) => d.writes),
+    parts.masterWrite,
+    ...parts.updates.map((u) => u.writes),
+    ...parts.inserts.map((i) => i.writes),
+  ]);
+  if (single.ops.length <= GROUP_OPS && estimateBatchBytes(single.ops) <= GROUP_BYTES) return single;
+  const writing = [...parts.deletes, ...parts.updates].filter((w) => w.writes.length);
+  if (!writing.length && !parts.inserts.length) return single;
+  const written = new Set(writing.map((w) => w.row));
+  const rows: RowWrite[] = [
+    ...writing.map((w) => ({ asserts: parts.rows.get(w.row) ?? [], writes: w.writes })),
+    ...parts.inserts,
+  ];
+  // The master row's own assert guards every group; its attendees and reminders go with its write.
+  const groups = cutRows(ref, rows, parts.master.slice(0, 1), parts.count);
+  const rest = [...parts.rows].filter(([row]) => !written.has(row)).flatMap(([, asserts]) => asserts);
+  groups.push(assemble(ref, [...parts.master, ...rest], [parts.masterWrite]));
+  return chained(groups);
+}
+
+/**
+ * A new event's rows as one group, or, when they are more than a group may
+ * hold, as a chain: `master` (the master's insert with its identity but
+ * without its shadow), its exception rows in groups of the budget, each
+ * asserting the master by `masterRef` and linked to it by ORIGINAL_SYNC_ID
+ * (the provider fills ORIGINAL_ID from it and CALENDAR_ID), then `shadow`.
+ * Cut off in between, the next download finds the master by its identity and
+ * writes what is missing; a master without a shadow merges like an adopted one.
+ */
+export function eventInsert(
+  ref: string,
+  single: OpGroup,
+  partsOf: () => { masterRef: string; master: ProviderOp[]; exceptions: RowWrite[]; shadow: CalendarEventWire },
+): OpGroup {
+  if (single.ops.length <= GROUP_OPS && estimateBatchBytes(single.ops) <= GROUP_BYTES) return single;
+  const parts = partsOf();
+  const byIdentity = { table: 'events' as const, where: `${Events._SYNC_ID} = ?`, args: [parts.masterRef], expectCount: 1 };
+  const groups = [assemble(ref, [], [parts.master]), ...cutRows(ref, parts.exceptions, [{ op: 'assert', ...byIdentity }])];
+  groups.push({ ref, ops: [{ op: 'update', ...byIdentity, values: { [Events.SYNC_DATA1]: JSON.stringify(parts.shadow) } }] });
+  return chained(groups);
 }

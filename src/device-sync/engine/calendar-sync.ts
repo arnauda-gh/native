@@ -10,13 +10,13 @@ import type { CalendarContext, CalendarEventWire, CalendarLike, CalendarPlanner,
 import { CALENDAR_AUTHORITY, type ReminderOwner, type Row } from '../types';
 import { CALENDAR_EVENT_PROPERTIES, CALENDAR_PROPERTIES } from '../wire';
 import { calendarAddresses, type CalendarAddresses, type CapabilityAccount } from '../jmap/session';
-import type { Work } from './batch';
+import { chainHasWrites, type Work } from './batch';
 import type { RunEnv } from './context';
 import type { SubscriptionCalendar } from './deps';
 import { ItemSync, type Pending } from './item-sync';
 import { accountOfRef, idInAccount, refOf, type Held, type Kind, type ServerObject } from './kinds';
 import { poisonFingerprint } from './poison';
-import { flag, hasWrites, num, str } from './provider';
+import { flag, num, str } from './provider';
 import { isCollectionSelected } from './selection';
 import { accountOf, type SyncState } from './sync-state';
 
@@ -501,7 +501,7 @@ export class CalendarSync extends ItemSync {
           const held: Held = { kind: this.eventKind, local: moved };
           try {
             const work = this.acceptWork(acct, { held, meta: this.eventKind.meta(moved), fingerprint: '', actions: [] }, server, false);
-            if (hasWrites(work.group.ops)) return [work];
+            if (chainHasWrites(work.group)) return [work];
             // The pair's ops already wrote what the server holds.
             this.env.report.stats.uploaded.updated++;
             return [];

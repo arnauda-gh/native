@@ -31,7 +31,7 @@ import { claimOps, claimUid, claimedUid, computeCreate, createTarget, deleteActi
 import { decodeCalendar, decodeEvents, isExceptionRow, isNewMaster } from './decode';
 import { isExcluded, overridesOf } from './exceptions';
 import { eventImage } from './image';
-import { insertEvent, isRemovedInstance, linkedExceptionCount, pickCalendar, writeEvent, type CalendarTarget } from './merge';
+import { insertEvent, insertEventOps, isRemovedInstance, linkedExceptionCount, pickCalendar, writeEvent, type CalendarTarget } from './merge';
 import { pairKind, pairOps, pairPatch } from './pairs';
 import { GroupBuilder, assertExceptionCount, assertRow, deleteRow, writesOf } from './rows';
 import { eventZone } from './timing';
@@ -74,7 +74,7 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
   if (!image) return none(!!local && (local.dirty || local.deleted));
 
   if (!local) {
-    const ops = insertEvent(event, image, ctx, ref).build();
+    const ops = insertEventOps(event, image, ctx, ref);
     return { ops, conflicts: 0, stillDirty: false, effect: 'insert', writes: writesOf(ops) };
   }
   // A split clone only looks like this object: it is a new event and uploads as one. The source row is the object's.
@@ -118,7 +118,7 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
     ...(local.shadow ? {} : { pending: null }),
     clearPoison: !itemDirty,
   });
-  const ops = result.group.build();
+  const ops = result.ops;
   const writes = writesOf(ops);
   return {
     ops: writes ? ops : { ref, ops: [] },
@@ -222,7 +222,7 @@ function revertGroup(local: LocalEvent, ctx: CalendarContext): OpGroup | null {
   if (!target) return null;
   const image = eventImage(shadow, target.calendarRowId, target.calendarId, ctx);
   if (!image) return null;
-  return writeEvent(shadow, image, target, local, { mode: 'overwrite', ref: refOf(local), ctx, base: shadow }).group.build();
+  return writeEvent(shadow, image, target, local, { mode: 'overwrite', ref: refOf(local), ctx, base: shadow }).ops;
 }
 
 /** Clears DIRTY where nothing uploadable changed, taking the rows as they are as the new baselines. */
@@ -368,7 +368,7 @@ function planAccepted(local: LocalEvent, server: CalendarEventWire, ctx: Calenda
     base: local.shadow ?? server,
     pending: null,
     clearPoison: true,
-  }).group.build();
+  }).ops;
   return { ops, keepDirtyOps };
 }
 
@@ -411,7 +411,7 @@ function planZoneChange(local: LocalEvent, previousZone: string, ctx: CalendarCo
   if (!target) return null;
   const image = eventImage(shadow, target.calendarRowId, target.calendarId, ctx);
   if (!image) return null;
-  const ops = writeEvent(shadow, image, target, local, { mode: 'overwrite', ref: refOf(local), ctx, base: shadow }).group.build();
+  const ops = writeEvent(shadow, image, target, local, { mode: 'overwrite', ref: refOf(local), ctx, base: shadow }).ops;
   return writesOf(ops) ? ops : null;
 }
 

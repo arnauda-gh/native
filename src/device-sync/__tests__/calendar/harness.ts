@@ -86,9 +86,12 @@ export class Harness {
     return this;
   }
 
+  /** Applies a group and the groups after it (`next`), each in a batch of its own, as the engine does. */
   async apply(group: OpGroup): Promise<void> {
-    const result = await this.port.applyBatch(group.ops);
-    if (!result.ok) throw new Error(`batch ${group.ref} failed: ${result.reason} ${result.message}`);
+    for (const g of [group, ...(group.next ?? [])]) {
+      const result = await this.port.applyBatch(g.ops);
+      if (!result.ok) throw new Error(`batch ${group.ref} failed: ${result.reason} ${result.message}`);
+    }
   }
 
   async tryApply(group: OpGroup) {

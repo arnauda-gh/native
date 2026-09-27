@@ -201,6 +201,57 @@ describe('provider batches', () => {
     await writer(p).write([{ group: { ref: 'g', ops: [{ op: 'assert', table: 'raw_contacts', id: 1, values: { dirty: 0 } }] } }]);
     expect(p.sent).toEqual([]);
   });
+
+  describe('an item too big for one group (a chain)', () => {
+    const named = (n: string) => insert('data', { n });
+    const namesOf = (batches: ProviderOp[][]) => batches.map((b) => b.map((op) => (op.op === 'insert' ? op.values.n : op.op)));
+    const chained = (extra: Partial<Work> = {}): Work => ({
+      group: { ref: 'big', ops: [named('1')], next: [{ ref: 'big', ops: [named('2')] }, { ref: 'big', ops: [named('3')] }] },
+      ...extra,
+    });
+
+    it('applies its groups in order, each in a batch of its own, between the other works, and counts it after the last', async () => {
+      const p = port(ok);
+      const applied: string[] = [];
+      const store = new StateStore(emptySyncState(), { registryId: 'r', origin: 'o' });
+      const big = chained({
+        applied: (results) => void applied.push(`big:${results.length}`),
+        state: (next) => {
+          accountOf(next, 'a').stale = ['big'];
+        },
+      });
+      const other = (n: string): Work => ({ group: { ref: n, ops: [named(n)] }, applied: () => void applied.push(n) });
+
+      await new BatchWriter(p, { maxOps: 400, maxBytes: 300_000, maxReplans: 3 }, store).write(
+        [other('a'), big, other('b')],
+        store.tail(() => undefined),
+      );
+
+      expect(namesOf(p.sent)).toEqual([['a'], ['1'], ['2'], ['3', 'syncState'], ['b', 'syncState']]);
+      expect(applied).toEqual(['a', 'big:3', 'b']);
+      expect(store.committed.accounts.a.stale).toEqual(['big']);
+    });
+
+    it('plans the item again from what its first groups wrote when a later one fails, never sending that one again', async () => {
+      let failures = 1;
+      const p = port((ops) => (namesOf([ops])[0].includes('2') && failures-- > 0 ? { ok: false, reason: 'assert', message: 'changed' } : ok(ops)));
+      const rest: Work = { group: { ref: 'big', ops: [named('rest')] } };
+
+      await writer(p).write([chained({ replan: async () => rest })]);
+
+      expect(namesOf(p.sent)).toEqual([['1'], ['2'], ['rest']]);
+    });
+
+    it('gives the item up when one of its groups is refused for good', async () => {
+      const p = port((ops) => (namesOf([ops])[0].includes('2') ? { ok: false, reason: 'tooLarge', message: 'TransactionTooLargeException' } : ok(ops)));
+      const failed = vi.fn();
+
+      await writer(p).write([chained({ failed, replan: async () => null })]);
+
+      expect(namesOf(p.sent)).toEqual([['1'], ['2']]);
+      expect(failed).toHaveBeenCalledWith('tooLarge', 'TransactionTooLargeException');
+    });
+  });
 });
 
 describe('SyncState', () => {

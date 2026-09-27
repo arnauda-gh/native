@@ -19,7 +19,7 @@
  * edit of them) and the number of exception rows.
  */
 import { Events } from '../android-columns';
-import type { CalendarContext, EventBaseline, LocalEvent, LocalEventRow, LocalException } from '../planner';
+import type { CalendarContext, EventBaseline, LocalEvent, LocalEventRow, LocalException, OpGroup } from '../planner';
 import type { Row } from '../types';
 import type { CalendarEventWire } from '../wire';
 import { collectionKey, exceptionRef, objectRef } from '../common/ids';
@@ -31,6 +31,8 @@ import {
   assertExceptionCount,
   assertRow,
   deleteRow,
+  eventInsert,
+  eventWrite,
   insertRow,
   updateRow,
   type RowState,
@@ -240,7 +242,8 @@ export type WriteMode =
   | 'overwrite';
 
 export interface EventWriteResult {
-  group: GroupBuilder;
+  /** One group, or a chain for an event too big for one (see `eventWrite`). */
+  ops: OpGroup;
   conflicts: number;
   stillDirty: boolean;
 }
@@ -277,7 +280,6 @@ export function writeEvent(
   options: EventWriteOptions,
 ): EventWriteResult {
   const { ctx } = options;
-  const group = new GroupBuilder(options.ref);
   const overwrite = options.mode === 'overwrite';
   const masterRef = objectRef(ctx.jmapAccountId, event.id);
   const uid = typeof event.uid === 'string' && event.uid ? event.uid : null;
@@ -288,9 +290,14 @@ export function writeEvent(
 
   // Asserts first: the rows as read. Attendees and reminders only for dirty rows (see `assertRow`): a big
   // meeting's occurrences would otherwise assert every attendee and outgrow one provider transaction.
-  assertRow(group, local, false, local.dirty || local.deleted);
-  for (const x of local.exceptions) assertRow(group, x, true, x.dirty || x.deleted);
-  assertExceptionCount(group, local.eventId, linkedExceptionCount(local));
+  const opsOf = (build: (group: GroupBuilder) => void) => {
+    const group = new GroupBuilder(options.ref);
+    build(group);
+    return group.build().ops;
+  };
+  const masterAsserts = opsOf((g) => assertRow(g, local, false, local.dirty || local.deleted));
+  const rowAsserts = new Map(local.exceptions.map((x) => [x.eventId, opsOf((g) => assertRow(g, x, true, x.dirty || x.deleted))]));
+  const countAssert = opsOf((g) => assertExceptionCount(g, local.eventId, linkedExceptionCount(local)));
 
   let conflicts = 0;
   let stillDirty = false;
@@ -412,12 +419,17 @@ export function writeEvent(
     updates.push({ row, state: exceptionState(key, merged, left, row, !!r) });
   }
 
-  for (const row of deletes) deleteRow(group, row.eventId);
-  updateRow(group, local, masterState);
-  for (const { row, state } of updates) updateRow(group, row, state);
-  for (const state of inserts) insertRow(group, state, { id: local.eventId });
+  const ops = eventWrite(options.ref, {
+    master: masterAsserts,
+    rows: rowAsserts,
+    count: countAssert,
+    deletes: deletes.map((row) => ({ row: row.eventId, asserts: [], writes: opsOf((g) => deleteRow(g, row.eventId)) })),
+    masterWrite: opsOf((g) => updateRow(g, local, masterState)),
+    updates: updates.map(({ row, state }) => ({ row: row.eventId, asserts: [], writes: opsOf((g) => updateRow(g, row, state)) })),
+    inserts: inserts.map((state) => ({ asserts: [], writes: opsOf((g) => insertRow(g, state, { id: local.eventId })) })),
+  });
 
-  return { group, conflicts, stillDirty: !overwrite && (stillDirty || local.deleted) };
+  return { ops, conflicts, stillDirty: !overwrite && (stillDirty || local.deleted) };
 }
 
 /** The row an exception image becomes, written clean. */
@@ -438,12 +450,8 @@ export function imageState(x: ExceptionImage, calendarRowId: number, masterRef: 
   };
 }
 
-/** A new event's rows: the master and one row per exception, attendees and reminders included. */
-export function insertEvent(event: CalendarEventWire, image: EventImage, ctx: CalendarContext, ref: string): GroupBuilder {
-  const group = new GroupBuilder(ref);
-  const masterRef = objectRef(ctx.jmapAccountId, event.id);
-  const uid = typeof event.uid === 'string' && event.uid ? event.uid : null;
-  const master = insertRow(group, {
+function masterInsertState(event: CalendarEventWire, image: EventImage, masterRef: string, uid: string | null): RowState {
+  return {
     isException: false,
     cells: image.master.cells,
     attendees: image.master.attendees,
@@ -453,10 +461,39 @@ export function insertEvent(event: CalendarEventWire, image: EventImage, ctx: Ca
     uid,
     shadow: event,
     hasParticipants: image.master.hasParticipants,
-  });
+  };
+}
+
+/** A new event's rows: the master and one row per exception, attendees and reminders included. */
+export function insertEvent(event: CalendarEventWire, image: EventImage, ctx: CalendarContext, ref: string): GroupBuilder {
+  const group = new GroupBuilder(ref);
+  const masterRef = objectRef(ctx.jmapAccountId, event.id);
+  const uid = typeof event.uid === 'string' && event.uid ? event.uid : null;
+  const master = insertRow(group, masterInsertState(event, image, masterRef, uid));
   for (const key of [...image.exceptions.keys()].sort()) {
     const x = image.exceptions.get(key)!;
     insertRow(group, imageState(x, Number(image.master.cells[Events.CALENDAR_ID]), masterRef, uid), { ref: master });
   }
   return group;
+}
+
+/** A new event's rows as one group, or as a chain for an event too big for one (see `eventInsert`). */
+export function insertEventOps(event: CalendarEventWire, image: EventImage, ctx: CalendarContext, ref: string): OpGroup {
+  const masterRef = objectRef(ctx.jmapAccountId, event.id);
+  const uid = typeof event.uid === 'string' && event.uid ? event.uid : null;
+  const calendarRowId = Number(image.master.cells[Events.CALENDAR_ID]);
+  const opsOf = (build: (group: GroupBuilder) => void) => {
+    const group = new GroupBuilder(ref);
+    build(group);
+    return group.build().ops;
+  };
+  return eventInsert(ref, insertEvent(event, image, ctx, ref).build(), () => ({
+    masterRef,
+    master: opsOf((g) => insertRow(g, { ...masterInsertState(event, image, masterRef, uid), shadow: undefined })),
+    exceptions: [...image.exceptions.keys()].sort().map((key) => ({
+      asserts: [],
+      writes: opsOf((g) => insertRow(g, imageState(image.exceptions.get(key)!, calendarRowId, masterRef, uid))),
+    })),
+    shadow: event,
+  }));
 }
