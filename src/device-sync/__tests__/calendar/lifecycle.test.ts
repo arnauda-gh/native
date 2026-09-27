@@ -336,6 +336,34 @@ describe('calendar planner: accepted uploads, merges and deletions', () => {
     expect(await h.events()).toEqual([]);
   });
 
+  it('leaves an event the server moved out of every synced calendar before the deletion reached it, and only purges the rows', async () => {
+    const { h, id } = await synced(single());
+    const isSelected = h.ctx.isSelected;
+    h.ctx = { ...h.ctx, isSelected: (key) => key !== `${ACCT}/x` && isSelected(key) };
+    h.fake.user.deleteEvent(id);
+    // The shadow follows the server although no synced calendar holds the event now.
+    expect(await h.download(single({ calendarIds: { x: true } }))).toMatchObject({ stillDirty: true, effect: 'update' });
+    expect(h.row(id)).toMatchObject({ [Events.DELETED]: 1 });
+
+    const plan = calendarPlanner.planUpload((await h.local('e1'))!, h.ctx);
+    expect(plan.kind).toBe('purge');
+    if (plan.kind === 'purge') await h.apply(plan.ops);
+    expect(await h.events()).toEqual([]);
+  });
+
+  it('still destroys an event the server moved to another synced calendar, or whose calendar was deselected before the upload', async () => {
+    const destroy = [{ kind: 'destroy', id: 'e1', uid: 'single-1@example.org' }];
+    const moved = await synced(single());
+    moved.h.fake.user.deleteEvent(moved.id);
+    await moved.h.download(single({ calendarIds: { w: true } }));
+    expect(actionsOf(calendarPlanner.planUpload((await moved.h.local('e1'))!, moved.h.ctx))).toEqual(destroy);
+
+    const deselected = await synced(single());
+    deselected.h.fake.user.deleteEvent(deselected.id);
+    deselected.h.ctx = { ...deselected.h.ctx, isSelected: () => false };
+    expect(actionsOf(calendarPlanner.planUpload((await deselected.h.local('e1'))!, deselected.h.ctx))).toEqual(destroy);
+  });
+
   it('destroys a deleted event whose create had an unknown outcome by its uid', async () => {
     const h = await new Harness().setup();
     const id = h.fake.user.insertEvent(h.rowIds.get('b')!, { [Events.TITLE]: 'x', [Events.DTSTART]: 0, [Events.DTEND]: 1000, [Events.EVENT_TIMEZONE]: 'UTC', [Events.STATUS]: 1 });

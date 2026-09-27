@@ -27,7 +27,7 @@ import { isTaskLikeObject } from '../../lib/calendar-component-detection';
 import { keepDirtyGroup, type UploadedUnits } from './accepted';
 import { ATTENDEE_COLUMNS, CALENDAR_COLUMNS, EVENT_COLUMNS, EXCEPTION_CELLS, MASTER_CELLS, REMINDER_COLUMNS, isTruncatedBaseline, makeBaseline } from './columns';
 import { planCalendars } from './calendars';
-import { claimOps, claimUid, claimedUid, computeCreate, createTarget, deleteActions } from './create';
+import { claimOps, claimUid, claimedUid, computeCreate, createTarget, deleteActions, movedAway } from './create';
 import { decodeCalendar, decodeEvents, isExceptionRow, isNewMaster } from './decode';
 import { isExcluded, overridesOf } from './exceptions';
 import { eventImage } from './image';
@@ -65,6 +65,20 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
   refuseTask(local?.shadow);
   const ref = refOf(local, event, ctx.jmapAccountId);
   const none = (stillDirty: boolean): DownloadPlan => ({ ops: { ref, ops: [] }, conflicts: 0, stillDirty, effect: 'none', writes: 0 });
+  // A different object under a reused id: its rows are replaced, never patched.
+  const uidChanged = !!local?.shadow && typeof local.shadow.uid === 'string' && typeof event.uid === 'string' && local.shadow.uid !== event.uid;
+
+  if (local?.deleted && local.split !== 'clone' && !uidChanged) {
+    // Deleted on the device: that wins over a server edit, so only the shadow follows, for the deletion.
+    // Also when no synced calendar holds the event any more: the deletion is then moot (see planUpload).
+    if (!local.shadow || deepEqual(local.shadow, event)) return none(true);
+    const group = new GroupBuilder(ref);
+    group.assert({ op: 'assert', table: 'events', id: local.eventId, values: { [Events.DELETED]: 1, [Events._SYNC_ID]: local.syncId }, expectCount: 1 });
+    group.write({ op: 'update', table: 'events', id: local.eventId, values: { [Events.SYNC_DATA1]: JSON.stringify(event) }, expectCount: 1 });
+    const ops = group.build();
+    return { ops, conflicts: 0, stillDirty: true, effect: 'update', writes: writesOf(ops) };
+  }
+
   // An event another client moved out of every synced calendar still merges into its rows where they are
   // (they wait for an upload; the accepted write then removes them).
   const target = pickCalendar(event, local, ctx) ?? (local ? rowCalendar(local, ctx) : null);
@@ -80,8 +94,6 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
   // A split clone only looks like this object: it is a new event and uploads as one. The source row is the object's.
   if (local.split === 'clone') return none(true);
 
-  // A different object under a reused id: its rows are replaced, never patched.
-  const uidChanged = !!local.shadow && typeof local.shadow.uid === 'string' && typeof event.uid === 'string' && local.shadow.uid !== event.uid;
   if (uidChanged) {
     const group = new GroupBuilder(ref);
     for (const x of local.exceptions) deleteRow(group, x.eventId);
@@ -96,16 +108,6 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
     }
     const ops = group.build();
     return { ops, conflicts: 0, stillDirty: false, effect: 'update', writes: writesOf(ops) };
-  }
-
-  if (local.deleted) {
-    // Deleted on the device: that wins over a server edit, so only the shadow follows, for the destroy.
-    if (!local.shadow || deepEqual(local.shadow, event)) return none(true);
-    const group = new GroupBuilder(ref);
-    group.assert({ op: 'assert', table: 'events', id: local.eventId, values: { [Events.DELETED]: 1, [Events._SYNC_ID]: local.syncId }, expectCount: 1 });
-    group.write({ op: 'update', table: 'events', id: local.eventId, values: { [Events.SYNC_DATA1]: JSON.stringify(event) }, expectCount: 1 });
-    const ops = group.build();
-    return { ops, conflicts: 0, stillDirty: true, effect: 'update', writes: writesOf(ops) };
   }
 
   const itemDirty = local.dirty || local.split === 'source' || local.exceptions.some((x) => x.dirty || x.deleted);
@@ -266,6 +268,8 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
       return { kind: 'upload', actions: [{ kind: 'destroy', id: null, uid }] };
     }
     if (!parseObjectRef(local.syncId)) return { kind: 'purge', ops: purgeGroup(local) };
+    // Moved away on the server before the deletion reached it: nothing goes up, only the rows go.
+    if (movedAway(local, calendar, ctx)) return { kind: 'purge', ops: purgeGroup(local) };
     if (ctx.isReadOnly(calendar.calendarId)) return { kind: 'revert', ops: purgeGroup(local), refetch: true, reason: SKIP.readOnly };
     return { kind: 'upload', actions: deleteActions(local, ctx) };
   }

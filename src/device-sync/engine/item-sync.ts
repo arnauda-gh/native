@@ -659,7 +659,7 @@ export abstract class ItemSync {
         try {
           return this.downloadWork(kind, acct, object, found.local, written);
         } catch (error) {
-          // A planner that cannot place it (no synced calendar) leaves the deletion as it was planned.
+          // A planner that cannot take the server version leaves the deletion as it was planned.
           this.env.log(`deleted ${refOf(acct, object.id)} outside the selection keeps its shadow`, error);
           return null;
         }

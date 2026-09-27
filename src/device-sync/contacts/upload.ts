@@ -215,10 +215,24 @@ function readOnlyOnServer(local: LocalContact, ctx: Ctx): boolean {
   return !!local.shadow && ctx.isReadOnly(withoutMemberOf(local.shadow));
 }
 
+/**
+ * Whether the server moved the card out of every book its rows were written
+ * for (SYNC1), and into none this device syncs, before the device's deletion
+ * reached it: the deletion is moot then, and the card stays where it is now.
+ * A book deselected since still counts as the rows' own, so that deletion
+ * goes up; so does one of a card moved into another synced book.
+ */
+function movedAway(local: LocalContact, accountId: string, ctx: Ctx): boolean {
+  if (!local.shadow || !local.collections.length) return false;
+  const books = Object.entries(local.shadow.addressBookIds ?? {}).filter(([, on]) => on).map(([id]) => collectionKey(accountId, id));
+  return !books.some((key) => local.collections.includes(key) || ctx.isSelected(key));
+}
+
 function deletedPlan(local: LocalContact, ctx: Ctx): UploadPlan<ContactCardWire> {
   const purge = (): OpGroup => group(local, [deleteWhereId('raw_contacts', local.rawContactId)]);
   const ref = parseObjectRef(local.sourceId);
   if (ref) {
+    if (movedAway(local, ref.accountId, ctx)) return { kind: 'purge', ops: purge() };
     if (readOnlyOnServer(local, ctx)) return { kind: 'revert', ops: purge(), refetch: true, reason: 'readOnly' };
     const books = Object.entries(local.shadow?.addressBookIds ?? {}).filter(([, on]) => on).map(([id]) => id);
     const selected = books.filter((id) => ctx.isSelected(collectionKey(ref.accountId, id)));

@@ -262,6 +262,20 @@ export function createTarget(local: LocalEvent, ctx: CalendarContext): { key: st
 // ─── Deletions ──────────────────────────────────────────
 
 /**
+ * Whether the server moved a deleted event out of the calendar its row is in
+ * (`own`), and into none this device syncs, before the device's deletion
+ * reached it: the deletion is moot then, and the event stays where it is now.
+ * A calendar deselected since is still the row's own, so that deletion goes
+ * up; so does one of an event moved into another synced calendar.
+ */
+export function movedAway(local: LocalEvent, own: { jmapAccountId: string; calendarId: string }, ctx: CalendarContext): boolean {
+  if (!local.shadow) return false;
+  const ownKey = collectionKey(own.jmapAccountId, own.calendarId);
+  const keys = Object.entries(local.shadow.calendarIds ?? {}).filter(([, on]) => on).map(([id]) => collectionKey(ctx.jmapAccountId, id));
+  return !keys.some((key) => key === ownKey || ctx.isSelected(key));
+}
+
+/**
  * A deleted event with identity: an object in several calendars loses only
  * the selected memberships; otherwise it is destroyed, with scheduling
  * messages when others take part.

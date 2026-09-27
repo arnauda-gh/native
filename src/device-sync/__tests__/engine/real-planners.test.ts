@@ -358,7 +358,25 @@ describe('device sync engine with the real planners', () => {
       expect(planned).toEqual([[archive]]);
     });
 
-    it('still uploads the deletion of an event whose calendar the planner cannot place', async () => {
+    it('leaves a contact deleted on the device that another client moved out of every synced book', async () => {
+      const h = real();
+      const archive = h.server.addAddressBook('a', { name: 'Archive' });
+      h.prefs.contactsSelection[`a/${archive}`] = false;
+      const [ada] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+      await h.run();
+      h.device.user.deleteContact(h.contactNamed('Ada Lovelace')!.id);
+      // Another client files Ada in Archive only before the deletion reached the server.
+      h.server.serverUpdate('ContactCard', 'a', ada, { addressBookIds: { [archive]: true } });
+
+      const report = await h.run();
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 0, deleted: 0 } } });
+      expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ addressBookIds: { [archive]: true } });
+      expect(h.contacts().map((c) => c.name)).toEqual(['Grace Hopper']);
+    });
+
+    /** Lunch synced, deleted on the device, then filed by another client in Archive, which this device does not sync. */
+    async function lunchDeletedAndFiledAway() {
       const h = real();
       const archive = h.server.addCalendar('a', { name: 'Archive' });
       h.prefs.calendarSelection[`a/${archive}`] = false;
@@ -366,6 +384,31 @@ describe('device sync engine with the real planners', () => {
       await h.run(CALENDAR_AUTHORITY);
       h.device.user.deleteEvent(Number(h.events()[0]._id));
       h.server.serverUpdate('CalendarEvent', 'a', lunch, { calendarIds: { [archive]: true } });
+      return { h, archive, lunch };
+    }
+
+    it('leaves an event deleted on the device that another client moved out of every synced calendar', async () => {
+      const { h, archive, lunch } = await lunchDeletedAndFiledAway();
+
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 0, deleted: 0 } } });
+      expect(h.server.get('CalendarEvent', 'a', lunch)).toMatchObject({ calendarIds: { [archive]: true } });
+      expect(h.events()).toEqual([]);
+    });
+
+    it('still uploads the deletion as it was planned when the planner cannot take the server version', async () => {
+      const { h, lunch } = await lunchDeletedAndFiledAway();
+      h.deps.planners = {
+        ...h.deps.planners,
+        calendar: {
+          ...calendarPlanner,
+          planDownload: (event, local, ctx) => {
+            if (local?.deleted) throw new Error('cannot take it');
+            return calendarPlanner.planDownload(event, local, ctx);
+          },
+        },
+      };
 
       const report = await h.run(CALENDAR_AUTHORITY);
 

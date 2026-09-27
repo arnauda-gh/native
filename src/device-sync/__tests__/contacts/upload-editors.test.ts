@@ -326,6 +326,36 @@ describe('contacts upload: deleted contacts', () => {
     expect(h.device.row('raw_contacts', rawId)).toBeUndefined();
   });
 
+  it('leaves a card the server moved out of every synced book before the deletion reached it, and only purges the rows', async () => {
+    const h = new Harness();
+    const archive = h.server.addAddressBook(JMAP, { name: 'Archive' });
+    h.unselected.add(`${JMAP}/${archive}`);
+    const { id, rawId } = await h.seed(appleCard());
+    h.device.user.deleteContact(rawId);
+    h.server.serverUpdate('ContactCard', JMAP, id, { addressBookIds: { [archive]: true } });
+    await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+    expect(await uploadPlan(h, rawId)).toMatchObject({ kind: 'purge' });
+    await h.upload(rawId);
+    expect(h.device.row('raw_contacts', rawId)).toBeUndefined();
+    expect(h.server.get('ContactCard', JMAP, id)).toMatchObject({ addressBookIds: { [archive]: true } });
+  });
+
+  it('still destroys a card the server moved to another synced book, or whose book was deselected before the upload', async () => {
+    const moved = new Harness();
+    const work = moved.server.addAddressBook(JMAP, { name: 'Work' });
+    const a = await moved.seed(appleCard());
+    moved.device.user.deleteContact(a.rawId);
+    moved.server.serverUpdate('ContactCard', JMAP, a.id, { addressBookIds: { [work]: true } });
+    await moved.applyOk(moved.planner.planDownload(moved.card(a.id), await moved.contact(a.rawId), moved.ctx).ops);
+    expect(await uploadPlan(moved, a.rawId)).toEqual({ kind: 'upload', actions: [{ kind: 'destroy', id: a.id, uid: appleCard().uid }] });
+
+    const deselected = new Harness();
+    const b = await deselected.seed(appleCard());
+    deselected.device.user.deleteContact(b.rawId);
+    deselected.unselected.add(`${JMAP}/${deselected.book}`);
+    expect(await uploadPlan(deselected, b.rawId)).toEqual({ kind: 'upload', actions: [{ kind: 'destroy', id: b.id, uid: appleCard().uid }] });
+  });
+
   it('deletes its own create by id once the download found it, not by a uid lookup', async () => {
     const h = new Harness();
     const rawId = h.device.user.insertContact(ACCOUNT, [{ [Data.MIMETYPE]: MimeType.NOTE, data1: 'y' }]);
