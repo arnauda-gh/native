@@ -385,7 +385,7 @@ function planPairs(
       if (!pair) continue;
       const action: UploadAction<CalendarEventWire> = { kind: 'update', id: ref.id, patch: pair.patch };
       if (pair.sendSchedulingMessages) action.sendSchedulingMessages = true;
-      pairs.push({ deleted: d, fresh: f, actions: [action], ops: pairOps(d, f, pair.patch) });
+      pairs.push({ deleted: d, fresh: f, actions: [action], ops: pairOps(d, f, kind, pair.patch, ctx) });
       used.add(f.eventId);
       break;
     }

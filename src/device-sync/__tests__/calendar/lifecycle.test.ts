@@ -425,6 +425,94 @@ describe('calendar planner: pairs', () => {
     const events = await h.events();
     expect(calendarPlanner.planPairs(events.filter((e) => e.deleted), events.filter((e) => !e.syncId), h.ctx)).toEqual([]);
   });
+
+  /** Etar's move of `single()` (delete + insert into Work), with `extra` columns and children on the new row. */
+  const lunchColumns = {
+    [Events.TITLE]: 'Lunch', [Events.DTSTART]: utc('2026-10-06T10:00:00Z'), [Events.DTEND]: utc('2026-10-06T11:00:00Z'), [Events.EVENT_TIMEZONE]: 'Europe/Berlin', [Events.STATUS]: 1, [Events.AVAILABILITY]: 0, [Events.ACCESS_LEVEL]: 0,
+  };
+  async function pairAndApply(h: Harness) {
+    const events = await h.events();
+    const pairs = calendarPlanner.planPairs(events.filter((e) => e.deleted), events.filter((e) => !e.syncId && !e.deleted), h.ctx);
+    expect(pairs).toHaveLength(1);
+    await h.apply(pairs[0].ops);
+    return pairs[0];
+  }
+  const alert15 = { al1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M', relativeTo: 'start' }, action: 'display' } } as CalendarEventWire['alerts'];
+
+  it('keeps a reminder saved with the move for the next upload instead of taking it as the baseline', async () => {
+    const { h, id } = await synced(single({ alerts: alert15 }));
+    h.fake.user.deleteEvent(id);
+    const moved = h.fake.user.insertEvent(h.rowIds.get('w')!, lunchColumns, { reminders: [{ [Reminders.MINUTES]: 60, [Reminders.METHOD]: 1 }] });
+
+    const pair = await pairAndApply(h);
+
+    expect(pair.actions).toEqual([{ kind: 'update', id: 'e1', patch: { 'calendarIds/b': null, 'calendarIds/w': true } }]);
+    const after = (await h.local('e1'))!;
+    expect(after).toMatchObject({ eventId: moved, dirty: true });
+    const [update] = actionsOf(calendarPlanner.planUpload(after, h.ctx));
+    if (update.kind !== 'update') throw new Error('not an update');
+    // Only the reminder is left to send: the move went up with the pair.
+    expect(Object.keys(update.patch).every((k) => k.startsWith('alerts/'))).toBe(true);
+    const alerts = serverApply(after.shadow!, update.patch).alerts!;
+    expect(Object.values(alerts).map((a) => (a.trigger as { offset?: string }).offset)).toEqual(['-PT1H']);
+  });
+
+  it('uploads an edit made before the move, which the new row copied', async () => {
+    const { h, id } = await synced(single({ description: 'Bring salad' }));
+    h.fake.user.updateEvent(id, { [Events.DESCRIPTION]: 'Bring soup' });
+    h.fake.user.deleteEvent(id);
+    h.fake.user.insertEvent(h.rowIds.get('w')!, { ...lunchColumns, [Events.DESCRIPTION]: 'Bring soup' });
+
+    await pairAndApply(h);
+
+    const after = (await h.local('e1'))!;
+    expect(after.dirty).toBe(true);
+    expect(actionsOf(calendarPlanner.planUpload(after, h.ctx))).toEqual([{ kind: 'update', id: 'e1', patch: { description: 'Bring soup' } }]);
+  });
+
+  it('takes attendee rows an app re-inserted with constant details as they are, uploading nothing for them', async () => {
+    const participants = {
+      bob: { '@type': 'Participant', calendarAddress: 'mailto:bob@example.net', name: 'Bob', roles: { attendee: true, optional: true }, participationStatus: 'accepted' },
+      carol: { '@type': 'Participant', calendarAddress: 'mailto:carol@example.net', name: 'Carol', roles: { attendee: true }, participationStatus: 'declined' },
+    } as CalendarEventWire['participants'];
+    const { h, id } = await synced(single({ participants, organizerCalendarAddress: 'mailto:boss@example.net' }));
+    const attendees = h.fake.rows('attendees', `${Attendees.EVENT_ID} = ?`, [id]).map((a) => ({
+      // Etar writes every attendee it re-inserts as a required attendee without a status.
+      [Attendees.ATTENDEE_EMAIL]: a[Attendees.ATTENDEE_EMAIL], [Attendees.ATTENDEE_NAME]: a[Attendees.ATTENDEE_NAME],
+      [Attendees.ATTENDEE_RELATIONSHIP]: 1, [Attendees.ATTENDEE_TYPE]: 1, [Attendees.ATTENDEE_STATUS]: 0,
+    }));
+    const organizer = h.row(id)[Events.ORGANIZER];
+    h.fake.user.deleteEvent(id);
+    h.fake.user.insertEvent(h.rowIds.get('w')!, { ...lunchColumns, [Events.ORGANIZER]: organizer }, { attendees });
+
+    await pairAndApply(h);
+
+    const after = (await h.local('e1'))!;
+    expect(after.dirty).toBe(false);
+    expect(calendarPlanner.planUpload({ ...after, dirty: true }, h.ctx).kind).toBe('clean');
+  });
+
+  it('keeps the timing of a series turned single against the series, so a start moved before uploads', async () => {
+    const { h, id } = await synced(single({ recurrenceRule: { frequency: 'daily' } }));
+    // Moved an hour later in place, then turned into a single event (Etar: delete + insert).
+    h.fake.user.updateEvent(id, { [Events.DTSTART]: utc('2026-10-06T11:00:00Z') });
+    h.fake.user.deleteEvent(id);
+    h.fake.user.insertEvent(h.rowIds.get('b')!, { ...lunchColumns, [Events.DTSTART]: utc('2026-10-06T11:00:00Z'), [Events.DTEND]: utc('2026-10-06T12:00:00Z') });
+
+    const pair = await pairAndApply(h);
+
+    expect(pair.actions).toEqual([{ kind: 'update', id: 'e1', patch: { recurrenceRule: null } }]);
+    const after = (await h.local('e1'))!;
+    expect(after.dirty).toBe(true);
+    expect(actionsOf(calendarPlanner.planUpload(after, h.ctx))).toEqual([{ kind: 'update', id: 'e1', patch: { start: '2026-10-06T13:00:00' } }]);
+
+    // Without the earlier edit, the single event matches what the server holds after the pair: nothing left.
+    const plain = await synced(single({ recurrenceRule: { frequency: 'daily' } }));
+    plain.h.fake.user.deleteEvent(plain.id);
+    plain.h.fake.user.insertEvent(plain.h.rowIds.get('b')!, lunchColumns);
+    await pairAndApply(plain.h);
+    expect((await plain.h.local('e1'))!.dirty).toBe(false);
+  });
 });
 
 describe('calendar planner: baselines, zones and reminder owners', () => {

@@ -166,6 +166,91 @@ describe('calendar device edits through the engine', () => {
     expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
   });
 
+  describe("Etar's move (delete + insert) with other edits", () => {
+    /** The event columns Etar copies into the row it inserts when it moves an event. */
+    const ETAR_COPY = [
+      Events.TITLE, Events.DESCRIPTION, Events.EVENT_LOCATION, Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL,
+      Events.EVENT_COLOR, Events.DTSTART, Events.DTEND, Events.DURATION, Events.EVENT_TIMEZONE, Events.ALL_DAY, Events.RRULE, Events.EXDATE,
+    ];
+    function etarMove(h: Harness, masterId: number, calendarRowId: number, reminders: Array<{ minutes: number }>): number {
+      const old = h.events().find((e) => Number(e._id) === masterId)!;
+      const values = Object.fromEntries(ETAR_COPY.filter((c) => old[c] !== undefined).map((c) => [c, old[c]]));
+      h.device.user.deleteEvent(masterId);
+      return h.device.user.insertEvent(calendarRowId, values, {
+        reminders: reminders.map((r) => ({ [Reminders.MINUTES]: r.minutes, [Reminders.METHOD]: 1 })),
+      });
+    }
+    const minutes = (h: Harness, eventId: number) =>
+      h.device.rows('reminders').filter((r) => Number(r[Reminders.EVENT_ID]) === eventId).map((r) => Number(r[Reminders.MINUTES]));
+
+    it('uploads a reminder saved with the move, and keeps the event', async () => {
+      const h = real();
+      const work = h.server.addCalendar('a', { name: 'Work' });
+      const id = h.server.addEvent('a', {
+        uid: 'lunch-uid',
+        title: 'Lunch',
+        start: '2026-10-06T12:00:00',
+        duration: 'PT1H',
+        timeZone: 'Europe/Berlin',
+        keywords: { important: true },
+        alerts: { al1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M' }, action: 'display' } },
+        calendarIds: { [h.calendar]: true },
+      });
+      await h.run(CALENDAR_AUTHORITY);
+      const master = Number(h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!._id);
+      const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+
+      const moved = etarMove(h, master, workRow, [{ minutes: 60 }]);
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, deleted: 0 } } });
+      const event = h.server.get('CalendarEvent', 'a', id)!;
+      expect(event).toMatchObject({ uid: 'lunch-uid', calendarIds: { [work]: true }, keywords: { important: true } });
+      const alerts = Object.values(event.alerts as Record<string, { trigger: { offset: string } }>).map((a) => a.trigger.offset);
+      expect(alerts).toEqual(['-PT1H']);
+      expect(h.events()).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${id}`, [Events.DIRTY]: 0 })]);
+      expect(minutes(h, moved)).toEqual([60]);
+
+      const before = h.batches.log.length;
+      await h.run(CALENDAR_AUTHORITY);
+      expect(h.batches.log.slice(before).filter((ops) => ops.some((op) => op.op !== 'syncState' && op.op !== 'assert'))).toEqual([]);
+    });
+
+    it('keeps an occurrence edit that had not reached the server when the series moves', async () => {
+      const h = real();
+      const work = h.server.addCalendar('a', { name: 'Work' });
+      const id = h.server.addEvent('a', {
+        uid: 'standup-uid',
+        title: 'Standup',
+        start: '2026-09-28T09:00:00',
+        duration: 'PT15M',
+        timeZone: 'Europe/Berlin',
+        recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', count: 5 },
+        recurrenceOverrides: { '2026-09-29T09:00:00': { title: 'Planning' } },
+        calendarIds: { [h.calendar]: true },
+      });
+      await h.run(CALENDAR_AUTHORITY);
+      const master = Number(h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!._id);
+      const exception = Number(h.events().find((e) => e[Events.ORIGINAL_SYNC_ID] === `a/${id}`)!._id);
+      const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+      // The occurrence is renamed on the device; before it syncs, Etar moves the series (it copies only unsynced exceptions).
+      h.device.user.updateEvent(exception, { [Events.TITLE]: 'Sprint planning' });
+
+      const moved = etarMove(h, master, workRow, []);
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, deleted: 0 } } });
+      const event = h.server.get('CalendarEvent', 'a', id)!;
+      expect(event.calendarIds).toEqual({ [work]: true });
+      expect((event.recurrenceOverrides as Overrides)['2026-09-29T09:00:00']).toMatchObject({ title: 'Sprint planning' });
+      const rows = h.events();
+      expect(rows.filter((e) => e[Events.ORIGINAL_ID] === null)).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${id}`, [Events.DIRTY]: 0 })]);
+      expect(rows.filter((e) => e[Events.ORIGINAL_ID] !== null)).toEqual([
+        expect.objectContaining({ [Events.ORIGINAL_ID]: moved, [Events.CALENDAR_ID]: workRow, [Events.TITLE]: 'Sprint planning', [Events.DIRTY]: 0 }),
+      ]);
+    });
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {

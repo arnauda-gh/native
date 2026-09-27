@@ -9,17 +9,20 @@
  * target account and a destroy in the source.
  */
 import { Attendees, Events } from '../android-columns';
-import type { CalendarContext, LocalEvent, LocalEventRow, OpGroup } from '../planner';
+import type { CalendarContext, EventBaseline, LocalEvent, LocalEventRow, OpGroup } from '../planner';
 import type { Row } from '../types';
 import type { CalendarEventWire } from '../wire';
 import { exceptionRef, parseObjectRef } from '../common/ids';
+import { clone } from '../common/json';
 import { applyPatch, type PatchObject } from '../common/patch';
 import { EXCEPTION_CELLS, MASTER_CELLS, encodeBaseline, makeBaseline } from './columns';
 import { durationTextSeconds } from './duration';
 import { isExcluded, overridesOf } from './exceptions';
-import { GroupBuilder, assertRow, deleteRow, updateRow } from './rows';
+import { linkedExceptionCount } from './merge';
+import { GroupBuilder, assertExceptionCount, assertRow, deleteRow, updateRow } from './rows';
 import { rruleParts } from './rrule';
 import { sendsSchedulingMessages } from './scheduling';
+import { MASTER_COLUMN_UNITS, deviceChangedUnit, exdateEntries, remindersDiffer, sideOfBaseline, sideOfRow } from './units';
 import { put } from './upload';
 import { isUnsetStatus } from './values';
 
@@ -101,24 +104,80 @@ export function pairPatch(
   return { patch, sendSchedulingMessages: scheduling };
 }
 
+const children = (row: LocalEventRow) => ({ attendees: row.attendees.map((a) => a.cells), reminders: row.reminders.map((r) => r.cells) });
+
 /**
- * Applied once the pair's patch is accepted: the old row and its exception
- * rows go, the new row takes the identity (its copied exception rows the
- * overrides that still exist), and the shadow is the old one with the patch
- * applied until the next download brings the server's.
+ * The new row's baseline: the old row's (what the server held, as last
+ * written) with what the patch changed, the calendar and, for a series turned
+ * single, its rule and its timing as a single event. So an edit saved with the
+ * move, or made before it, still differs from the baseline and uploads next.
+ * Attendee rows are the app's re-insert (Etar writes every attendee it copies
+ * as required, without a status), so their details are no edits: they are
+ * taken as they are, like the reminders of a row that copied none.
  */
-export function pairOps(deleted: LocalEvent, fresh: LocalEvent, patch: PatchObject): OpGroup {
+function pairedBaseline(deleted: LocalEvent, fresh: LocalEvent, kind: PairKind, ctx: CalendarContext): EventBaseline {
+  const own = makeBaseline(fresh.cells, MASTER_CELLS, children(fresh).attendees, children(fresh).reminders);
+  if (!deleted.baseline) return own;
+  const next = clone(deleted.baseline);
+  next.cells[Events.CALENDAR_ID] = own.cells[Events.CALENDAR_ID];
+  next.attendees = own.attendees;
+  if (ctx.reminderOwner !== 'device' || !fresh.reminders.length) next.reminders = own.reminders;
+  if (kind.unrecur) {
+    const start = num(deleted.baseline.cells[Events.DTSTART]);
+    const length = lengthMs(deleted.baseline.cells);
+    next.cells[Events.DTEND] = start !== null && length !== null ? start + length : own.cells[Events.DTEND];
+    next.cells[Events.DURATION] = null;
+    next.cells[Events.RRULE] = own.cells[Events.RRULE];
+    next.cells[Events.EXDATE] = own.cells[Events.EXDATE];
+  }
+  return next;
+}
+
+/** Whether a master holds a change against `baseline` that an upload would look at. */
+function changedSince(row: LocalEventRow, baseline: EventBaseline, ctx: CalendarContext): boolean {
+  const cur = sideOfRow(row);
+  const bl = sideOfBaseline(baseline);
+  if (MASTER_COLUMN_UNITS.some((unit) => deviceChangedUnit(unit, cur, bl))) return true;
+  const [now, before] = [exdateEntries(cur), exdateEntries(bl)];
+  if (now.size !== before.size || [...now].some((e) => !before.has(e))) return true;
+  return ctx.reminderOwner === 'device' && remindersDiffer(cur, bl);
+}
+
+/**
+ * Applied once the pair's patch is accepted: the new row takes the identity
+ * and the old row goes. The old row's exception rows move to the new row with
+ * what they wait to upload (Etar copies only the exceptions it never synced;
+ * an app's copy of one the old row has goes). A copied exception takes the
+ * identity of its override. The shadow is the old one with the patch applied
+ * until the server's comes back. A row that still differs from its baseline
+ * (see `pairedBaseline`) stays dirty and uploads next.
+ */
+export function pairOps(deleted: LocalEvent, fresh: LocalEvent, kind: PairKind, patch: PatchObject, ctx: CalendarContext): OpGroup {
   const syncId = deleted.syncId!;
   const shadow: CalendarEventWire = applyPatch(deleted.shadow!, patch) ?? deleted.shadow!;
   const group = new GroupBuilder(syncId);
   assertRow(group, deleted, false, false);
+  for (const x of deleted.exceptions) assertRow(group, x, true, x.dirty || x.deleted);
+  assertExceptionCount(group, deleted.eventId, linkedExceptionCount(deleted));
   assertRow(group, fresh, false, true);
   for (const x of fresh.exceptions) assertRow(group, x, true, true);
-  for (const x of deleted.exceptions) deleteRow(group, x.eventId);
+  assertExceptionCount(group, fresh.eventId, linkedExceptionCount(fresh));
+  const kept = new Set<string>();
+  for (const x of deleted.exceptions) {
+    // A series turned single has no occurrences left.
+    if (kind.unrecur || !x.recurrenceId) {
+      deleteRow(group, x.eventId);
+      continue;
+    }
+    kept.add(x.recurrenceId);
+    const values: Row = { [Events.ORIGINAL_ID]: fresh.eventId, [Events.CALENDAR_ID]: fresh.calendarRowId };
+    if (x.baseline) values[Events.SYNC_DATA4] = encodeBaseline({ ...x.baseline, cells: { ...x.baseline.cells, [Events.CALENDAR_ID]: fresh.calendarRowId } });
+    group.write({ op: 'update', table: 'events', id: x.eventId, values, expectCount: 1 });
+  }
   deleteRow(group, deleted.eventId);
-  const children = (row: LocalEventRow) => ({ attendees: row.attendees.map((a) => a.cells), reminders: row.reminders.map((r) => r.cells) });
   const cells: Row = {};
   for (const c of MASTER_CELLS) cells[c] = fresh.cells[c] ?? null;
+  const baseline = pairedBaseline(deleted, fresh, kind, ctx);
   updateRow(
     group,
     { ...fresh, shadow: null },
@@ -126,18 +185,22 @@ export function pairOps(deleted: LocalEvent, fresh: LocalEvent, patch: PatchObje
       isException: false,
       cells,
       ...children(fresh),
-      baseline: makeBaseline(fresh.cells, MASTER_CELLS, children(fresh).attendees, children(fresh).reminders),
+      baseline,
       syncId,
       uid: typeof shadow.uid === 'string' ? shadow.uid : null,
       shadow,
       pending: null,
-      clearDirty: true,
+      clearDirty: !changedSince(fresh, baseline, ctx),
       hasParticipants: fresh.attendees.length > 0,
     },
   );
   const overrides = overridesOf(shadow);
   for (const x of fresh.exceptions) {
     const key = x.recurrenceId;
+    if (key && kept.has(key)) {
+      deleteRow(group, x.eventId);
+      continue;
+    }
     const values: Row = { [Events.ORIGINAL_SYNC_ID]: syncId };
     if (key && overrides[key] && !isExcluded(overrides[key])) {
       Object.assign(values, {

@@ -492,6 +492,12 @@ export class CalendarSync extends ItemSync {
             if (ownId) this.markStale(acct, ownId);
             return [];
           }
+          if (this.eventKind.meta(moved).dirty) {
+            // Edits saved with the move, or made before it, are still to go up: the update phase
+            // sends them as the moved event's, and its accepted write brings the server's version.
+            this.env.report.stats.uploaded.updated++;
+            return [];
+          }
           const held: Held = { kind: this.eventKind, local: moved };
           try {
             const work = this.acceptWork(acct, { held, meta: this.eventKind.meta(moved), fingerprint: '', actions: [] }, server, false);
