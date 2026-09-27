@@ -157,15 +157,19 @@ export async function runDeviceSync(payload: RunPayload, deps: EngineDeps): Prom
   const key = lockKey(payload.registryId, payload.authority);
   const release = await acquireLock(key, Math.max(0, payload.deadline - deps.now() - tuning.deadlineMarginMs));
   let result: RunReport;
+  const run = { idle: false };
   if (!release) {
     result = report.build('cancelled', deps.now(), { message: 'Another sync of this account is still running', moreRecordsToGet: true });
   } else {
     try {
-      result = await runLocked(payload, deps, tuning, report, key);
+      result = await runLocked(payload, deps, tuning, report, key, run);
     } finally {
       release();
     }
   }
+  // An upload sync with nothing to upload (Android starts one right after a manual sync) did nothing:
+  // the last run's status, with its conflicts and item errors, stays what the settings show.
+  if (run.idle) return result;
   try {
     await deps.recordStatus(payload.registryId, payload.authority, statusOf(result, report.itemErrorCount));
   } catch (error) {
@@ -174,7 +178,14 @@ export async function runDeviceSync(payload: RunPayload, deps: EngineDeps): Prom
   return result;
 }
 
-async function runLocked(payload: RunPayload, deps: EngineDeps, tuning: Tuning, report: ReportBuilder, key: string): Promise<RunReport> {
+async function runLocked(
+  payload: RunPayload,
+  deps: EngineDeps,
+  tuning: Tuning,
+  report: ReportBuilder,
+  key: string,
+  run: { idle: boolean },
+): Promise<RunReport> {
   const finish = (outcome: RunReport['outcome'], extra: Parameters<ReportBuilder['build']>[2] = {}) =>
     report.build(outcome, deps.now(), extra);
   const extras = payload.extras ?? {};
@@ -189,7 +200,10 @@ async function runLocked(payload: RunPayload, deps: EngineDeps, tuning: Tuning, 
       return finish('internal', { message: 'The rows on this device were written for another account' });
     }
     // Providers schedule an upload sync for every account 30 s after any app write.
-    if (extras.upload && !(await hasLocalWork(reader, payload.authority, stored))) return finish('ok');
+    if (extras.upload && !(await hasLocalWork(reader, payload.authority, stored))) {
+      run.idle = true;
+      return finish('ok');
+    }
 
     const connection = await deps.jmap(payload.registryId);
     if (stored.owner && stored.owner.origin !== connection.origin) {
