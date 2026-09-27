@@ -124,11 +124,11 @@ export async function createEnv(options: EnvOptions): Promise<{ env: RunEnv; syn
     authority,
     extras: options.extras,
     reader: options.reader,
-    writer: new BatchWriter(options.reader.port, {
-      maxOps: tuning.maxBatchOps,
-      maxBytes: tuning.maxBatchBytes,
-      maxReplans: tuning.maxReplans,
-    }),
+    writer: new BatchWriter(
+      options.reader.port,
+      { maxOps: tuning.maxBatchOps, maxBytes: tuning.maxBatchBytes, maxReplans: tuning.maxReplans },
+      store,
+    ),
     report: options.report,
     checkpoints,
     store,

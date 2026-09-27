@@ -15,12 +15,16 @@
  * a committed group fail harmlessly); a group that fails an assert is
  * re-read and re-planned up to `maxReplans` times, then given up. `tooLarge`
  * splits the batch; `permission` ends the run.
+ *
+ * A group whose rows the SyncState describes (a group row: `groups`) carries
+ * that `state` change: every batch that applies such a group, a retry
+ * included, ends with a state op holding it.
  */
 import type { OpGroup } from '../planner';
 import type { BatchFailure, OpResult, ProviderOp, ProviderPort } from '../types';
 import { RunAbort } from './errors';
 import { hasWrites } from './provider';
-import type { Tail } from './sync-state';
+import type { StateChange, StateStore, Tail } from './sync-state';
 
 export interface Work {
   group: OpGroup;
@@ -30,6 +34,8 @@ export interface Work {
   replan?(): Promise<Work | null>;
   /** Given up: the item's rows stay as they are. */
   failed?(reason: BatchFailure, message: string): void | Promise<void>;
+  /** What the SyncState lists changes with these rows: stored by the batch that applies them. */
+  state?: StateChange;
 }
 
 export interface BatchWriterOptions {
@@ -100,6 +106,8 @@ export class BatchWriter {
   constructor(
     private readonly port: ProviderPort,
     private readonly options: BatchWriterOptions,
+    /** Where the `state` of works goes; without it, it is ignored. */
+    private readonly store?: StateStore,
   ) {}
 
   /**
@@ -162,9 +170,26 @@ export class BatchWriter {
     return result;
   }
 
+  /** The works' state changes go into the state op of the batch being sent: `tail`, or one of its own. */
+  private stage(works: readonly Work[], tail?: Tail): { staged: Work[]; tail?: Tail } {
+    const store = this.store;
+    const staged = store ? works.filter((w) => w.state) : [];
+    for (const work of staged) store!.stage(work, work.state!);
+    return { staged, tail: tail ?? (staged.length ? store!.tail(() => undefined) : undefined) };
+  }
+
+  private unstage(staged: readonly Work[]): void {
+    for (const work of staged) this.store!.unstage(work);
+  }
+
   private async applyBatch(works: Work[], tail?: Tail): Promise<void> {
-    const tailOp = tail?.op();
-    const result = await this.send(buildBatch(works.map((w) => w.group), tailOp));
+    const stated = this.stage(works, tail);
+    let result;
+    try {
+      result = await this.send(buildBatch(works.map((w) => w.group), stated.tail?.op()));
+    } finally {
+      this.unstage(stated.staged);
+    }
     if (result.ok) {
       let offset = 0;
       for (const work of works) {
@@ -172,7 +197,7 @@ export class BatchWriter {
         await work.applied?.(result.results.slice(offset, offset + n));
         offset += n;
       }
-      tail?.applied();
+      stated.tail?.applied();
       return;
     }
     if (result.reason === 'tooLarge' && works.length > 1) {
@@ -191,9 +216,16 @@ export class BatchWriter {
 
   private async applyAlone(work: Work, attempt: number): Promise<void> {
     if (!hasWrites(work.group.ops)) return;
-    const result = await this.send(buildBatch([work.group]));
+    const stated = this.stage([work]);
+    let result;
+    try {
+      result = await this.send(buildBatch([work.group], stated.tail?.op()));
+    } finally {
+      this.unstage(stated.staged);
+    }
     if (result.ok) {
-      await work.applied?.(result.results);
+      await work.applied?.(result.results.slice(0, work.group.ops.length));
+      stated.tail?.applied();
       return;
     }
     await this.retryAlone(work, result.reason, result.message, attempt);

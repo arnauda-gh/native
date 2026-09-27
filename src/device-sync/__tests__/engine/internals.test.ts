@@ -8,7 +8,7 @@ import { classifyFailure, RunAbort, StateMismatch, StopRun } from '../../engine/
 import { acquireLock } from '../../engine/mutex';
 import { isBackedOff, nextMarker } from '../../engine/poison';
 import { collectionDefaultOn, isCollectionSelected } from '../../engine/selection';
-import { emptySyncState, parseSyncState, serializeSyncState, StateStore } from '../../engine/sync-state';
+import { accountOf, emptySyncState, parseSyncState, serializeSyncState, StateStore, type SyncState } from '../../engine/sync-state';
 import { classifySetError, existingIdFromUidError, JmapCaller } from '../../jmap/caller';
 import { openWithAuthRebuild } from '../../jmap/connection';
 import { JMAPMethodError } from '../../jmap/errors';
@@ -125,6 +125,36 @@ describe('provider batches', () => {
     await expect(writer(denied).write([{ group: { ref: 'g', ops: [insert('raw_contacts')] } }])).rejects.toMatchObject({ outcome: 'permission' });
     const scope = port(() => ({ ok: false, reason: 'scope', message: 'not our account' }));
     await expect(writer(scope).write([{ group: { ref: 'g', ops: [insert('raw_contacts')] } }])).rejects.toThrow(/not our account/);
+  });
+
+  it("stores a group's state change in the batch that applies it, its retry included, and never without it", async () => {
+    const store = new StateStore(emptySyncState(), { registryId: 'r', origin: 'o' });
+    let failures = 1;
+    const p = port((ops) => (ops.some((op) => op.op === 'assert') && failures-- > 0 ? { ok: false, reason: 'assert', message: 'stale' } : ok(ops)));
+    const listed = (ref: string) => (next: SyncState) => {
+      accountOf(next, 'a').groups = [...(accountOf(next, 'a').groups ?? []), ref];
+    };
+    const groupOps = (id: number): ProviderOp[] => [
+      { op: 'assert', table: 'groups', id, values: { version: 1 } },
+      { op: 'update', table: 'groups', id, values: { sourceid: `a/g${id}` } },
+    ];
+    const plain: Work = { group: { ref: 'c', ops: [insert('raw_contacts'), insert('data')] } };
+    const retried: Work = { group: { ref: 'a/g1', ops: groupOps(1) }, state: listed('a/g1') };
+    retried.replan = async () => ({ group: retried.group, state: retried.state });
+    const w = new BatchWriter(p, { maxOps: 2, maxBytes: 300_000, maxReplans: 3 }, store);
+
+    await w.write([plain, retried]);
+
+    // The plain group alone, without a state op; the group with its state op, refused; its retry, with the state op.
+    expect(p.sent.map((b) => b.map((op) => op.op))).toEqual([['insert', 'insert'], ['assert', 'update', 'syncState'], ['assert', 'update', 'syncState']]);
+    expect(store.committed.accounts.a.groups).toEqual(['a/g1']);
+
+    failures = Infinity;
+    const given: Work = { group: { ref: 'a/g2', ops: groupOps(2) }, state: listed('a/g2'), replan: async () => null };
+    await w.write([given], store.tail(() => undefined));
+
+    expect(p.sent.at(-1)!.map((op) => op.op)).toEqual(['syncState']);
+    expect(store.committed.accounts.a.groups).toEqual(['a/g1']);
   });
 
   it('skips groups that only assert', async () => {

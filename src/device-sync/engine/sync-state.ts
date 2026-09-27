@@ -132,14 +132,20 @@ export interface Tail {
   applied(): void;
 }
 
+/** A change of the SyncState that has to be stored together with the rows it describes. */
+export type StateChange = (next: SyncState) => void;
+
 /**
  * The committed SyncState of a run. Changes are proposed as a tail: the
  * batch writer calls `op()` right before sending the last batch (so the
  * change sees what earlier batches decided, e.g. items put on `stale`), and
- * the state is only adopted after that batch applied.
+ * the state is only adopted after that batch applied. Changes that describe
+ * the rows of one batch (contacts: the groups present) are staged by the
+ * batch writer while it sends that batch, so its state op carries them.
  */
 export class StateStore {
   private state: SyncState;
+  private readonly staged = new Map<object, StateChange>();
 
   constructor(
     initial: SyncState,
@@ -157,7 +163,16 @@ export class StateStore {
     return this.state.accounts[jmapAccountId] ?? emptyAccountState();
   }
 
-  /** A tail applying `mutate` to a copy of the committed state (plus the owner). */
+  /** Every state op built until `unstage(key)` applies `change` too, after its own changes. */
+  stage(key: object, change: StateChange): void {
+    this.staged.set(key, change);
+  }
+
+  unstage(key: object): void {
+    this.staged.delete(key);
+  }
+
+  /** A tail applying `mutate` (then the staged changes) to a copy of the committed state (plus the owner). */
   tail(mutate: (next: SyncState) => void): Tail {
     let next: SyncState | null = null;
     return {
@@ -165,6 +180,7 @@ export class StateStore {
         next = clone(this.state);
         if (this.owner) next.owner = { ...this.owner };
         mutate(next);
+        for (const change of this.staged.values()) change(next);
         return { op: 'syncState', value: serializeSyncState(next) };
       },
       applied: () => {

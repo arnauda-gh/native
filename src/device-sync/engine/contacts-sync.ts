@@ -24,7 +24,7 @@ import { accountOfRef, idInAccount, refOf, type Held, type Kind, type ServerObje
 import { poisonFingerprint } from './poison';
 import { flag, num, str } from './provider';
 import { isCollectionSelected } from './selection';
-import { accountOf, type SyncState } from './sync-state';
+import { accountOf, type StateChange, type SyncState } from './sync-state';
 
 /**
  * The context the engine hands the contacts planner. `groupsOf` is
@@ -496,8 +496,27 @@ export class ContactsSync extends ItemSync {
     else this.indexCard(acct, object as ContactCardWire);
   }
 
+  /** A group whose row is there already is listed too: the batch that listed it may never have been stored. */
+  protected onEcho(kind: Kind, acct: string, object: ServerObject): void {
+    const ref = refOf(acct, object.id);
+    if (kind === this.groupKind && !(this.env.store.account(acct).groups ?? []).includes(ref)) this.groupChange(acct, ref, true);
+  }
+
   protected onRemoved(kind: Kind, acct: string, id: string): void {
     if (kind === this.groupKind) this.groupChange(acct, refOf(acct, id), false);
+  }
+
+  /** `groups` names a group row from the batch that inserts it until the batch that deletes it. */
+  protected listing(kind: Kind, acct: string, id: string, present: boolean): StateChange | undefined {
+    if (kind !== this.groupKind) return undefined;
+    const ref = refOf(acct, id);
+    return (next) => {
+      const account = accountOf(next, acct);
+      const groups = new Set(account.groups ?? []);
+      if (present) groups.add(ref);
+      else groups.delete(ref);
+      account.groups = [...groups];
+    };
   }
 
   protected onAccepted(kind: Kind, acct: string, server: ServerObject): void {
@@ -628,21 +647,24 @@ export class ContactsSync extends ItemSync {
   /**
    * A group hard-deleted on the device: destroyed on the server, or, when
    * it is also in address books that do not sync, removed from the synced
-   * ones only.
+   * ones only. A card that is no longer a group, or in no book that syncs,
+   * is not what the device showed: it is only forgotten.
    */
   private async deleteAbsentGroups(acct: string): Promise<void> {
     const refs = (this.absent.get(acct) ?? []).filter((ref) => this.groupChanges.get(acct)?.get(ref) !== false);
     if (!refs.length) return;
     await this.env.checkpoints.check('upload:groups');
     const ids = refs.map((ref) => idInAccount(ref, acct)).filter((id): id is string => !!id);
-    const { list, notFound } = await this.env.jmap.get<ContactCardWire & { id: string }>('ContactCard', acct, ids, ['id', 'addressBookIds']);
+    const { list, notFound } = await this.env.jmap.get<ContactCardWire & { id: string }>('ContactCard', acct, ids, ['id', 'addressBookIds', 'kind']);
     for (const id of notFound) this.groupChange(acct, refOf(acct, id), false);
     const update: Record<string, Record<string, unknown>> = {};
     const destroy: string[] = [];
     for (const card of list) {
       const books = onIds(card.addressBookIds);
       const synced = books.filter((id) => this.syncedKeys.has(collectionKey(acct, id)));
-      if (synced.length && synced.length < books.length) {
+      if (card.kind !== 'group' || !synced.length) {
+        this.groupChange(acct, refOf(acct, card.id), false);
+      } else if (synced.length < books.length) {
         update[card.id] = Object.fromEntries(synced.map((id) => [`addressBookIds/${id}`, null]));
       } else {
         destroy.push(card.id);

@@ -32,9 +32,17 @@ import {
 } from './kinds';
 import { isBackedOff, nextMarker } from './poison';
 import { hasWrites } from './provider';
-import { accountOf, type SyncState, type Tail } from './sync-state';
+import { accountOf, type StateChange, type SyncState, type Tail } from './sync-state';
 
 type Action = UploadAction<ServerObject>;
+
+function both(first: StateChange | undefined, second: StateChange | undefined): StateChange | undefined {
+  if (!first || !second) return first ?? second;
+  return (next) => {
+    first(next);
+    second(next);
+  };
+}
 
 /** An item's upload, on its way to the server. */
 export interface Pending {
@@ -122,8 +130,18 @@ export abstract class ItemSync {
   /** Authority changes folded into a state op of the account; the callback runs once that op is stored. */
   protected decorateState(_acct: string, _next: SyncState): (() => void) | void {}
   protected onDownloaded(_kind: Kind, _acct: string, _object: ServerObject): void {}
+  /** A download found the object's rows as they should be already. */
+  protected onEcho(_kind: Kind, _acct: string, _object: ServerObject): void {}
   protected onRemoved(_kind: Kind, _acct: string, _id: string): void {}
   protected onAccepted(_kind: Kind, _acct: string, _server: ServerObject): void {}
+  /**
+   * What the SyncState lists changes when a row of `kind` is inserted
+   * (`present`) or deleted (contacts: `groups`): stored by the batch that
+   * writes the row, so the list never disagrees with the rows.
+   */
+  protected listing(_kind: Kind, _acct: string, _id: string, _present: boolean): StateChange | undefined {
+    return undefined;
+  }
   protected onDiscard(_next: SyncState, _accounts: Set<string>): void {}
   /** Whether a pending create of `target` may adopt this object (contacts: the target book holds it). */
   protected adoptionTargetMatches(acct: string, _object: ServerObject, target: string): boolean {
@@ -588,6 +606,7 @@ export abstract class ItemSync {
     const ref = refOf(acct, object.id);
     const plan = kind.planDownload(object, local ?? null, acct);
     if (plan.effect === 'none' || !hasWrites(plan.ops.ops)) {
+      if (local) this.onEcho(kind, acct, object);
       if (!local || kind.meta(local).dirty) return null;
       const heal = kind.planBaselineHeal(local);
       return heal && hasWrites(heal.ops) ? { group: heal } : null;
@@ -595,6 +614,7 @@ export abstract class ItemSync {
     const group = local ? plan.ops : prependOps(plan.ops, [insertGuard(kind, ref)]);
     return {
       group,
+      state: this.listing(kind, acct, object.id, true),
       applied: () => {
         if (plan.effect === 'insert') this.env.report.stats.downloaded.created++;
         else this.env.report.stats.downloaded.updated++;
@@ -629,6 +649,7 @@ export abstract class ItemSync {
     const plan = kind.planDownload(object, null, acct);
     return {
       group: concatGroups(ref, found.kind.planLocalDelete(found.local), plan.ops),
+      state: both(this.listing(found.kind, acct, object.id, false), this.listing(kind, acct, object.id, true)),
       applied: () => {
         this.env.report.stats.downloaded.updated++;
         this.markResolved(acct, object.id);
@@ -657,6 +678,7 @@ export abstract class ItemSync {
     const conflict = reason === 'destroyed' && meta.dirty && !meta.deleted;
     return {
       group: found.kind.planLocalDelete(found.local),
+      state: this.listing(found.kind, acct, id, false),
       applied: () => {
         this.env.report.stats.downloaded.deleted++;
         if (conflict) this.env.report.conflicts++;
@@ -952,6 +974,7 @@ export abstract class ItemSync {
     const id = idInAccount(meta.sourceId, acct);
     return {
       group: held.kind.planLocalDelete(held.local),
+      state: id ? this.listing(held.kind, acct, id, false) : undefined,
       applied: () => {
         if (uploaded) this.env.report.stats.uploaded.deleted++;
         if (id) this.onRemoved(held.kind, acct, id);
@@ -1280,10 +1303,12 @@ export abstract class ItemSync {
       this.markStale(acct, server.id);
       this.env.report.itemError({ ref: refOf(acct, server.id), side: 'upload', type: reason, description: message });
     };
+    const state = this.listing(kind, acct, server.id, true);
     return {
       group: withExtra(plan.ops),
+      state,
       applied: counted,
-      replan: async () => ({ group: withExtra(plan.keepDirtyOps), applied: counted, failed }),
+      replan: async () => ({ group: withExtra(plan.keepDirtyOps), state, applied: counted, failed }),
       failed,
     };
   }
@@ -1310,11 +1335,19 @@ export abstract class ItemSync {
     const object = id ? (await this.env.jmap.get<ServerObject>(this.itemType, acct, [id], this.itemProperties)).list[0] : undefined;
     const objectKind = object ? this.kindOf(object) : null;
     if (!object || !objectKind || !this.inSelection(acct, object)) {
-      return [{ group: remove, applied: () => (id ? this.onRemoved(kind, acct, id) : undefined) }];
+      return [{
+        group: remove,
+        state: id ? this.listing(kind, acct, id, false) : undefined,
+        applied: () => (id ? this.onRemoved(kind, acct, id) : undefined),
+      }];
     }
     await this.beforePlanning(acct, [object]);
     const insert = objectKind.planDownload(object, null, acct);
-    return [{ group: concatGroups(ref, remove, insert.ops), applied: () => this.onDownloaded(objectKind, acct, object) }];
+    return [{
+      group: concatGroups(ref, remove, insert.ops),
+      state: both(this.listing(kind, acct, object.id, false), this.listing(objectKind, acct, object.id, true)),
+      applied: () => this.onDownloaded(objectKind, acct, object),
+    }];
   }
 
   /**
