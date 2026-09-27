@@ -155,6 +155,23 @@ export abstract class ItemSync {
   protected listing(_kind: Kind, _acct: string, _id: string, _present: boolean): StateChange | undefined {
     return undefined;
   }
+  /**
+   * Objects whose rows a download of `object` makes outdated (contacts: the
+   * members a group card gained or lost). They go on `stale` in the batch
+   * that writes it, so a stop before their own chunk leaves them to the next
+   * run's first fetch.
+   */
+  protected dependents(_kind: Kind, _acct: string, _object: ServerObject): string[] {
+    return [];
+  }
+
+  private staleWith(acct: string, ids: string[]): StateChange | undefined {
+    if (!ids.length) return undefined;
+    return (next) => {
+      const account = accountOf(next, acct);
+      account.stale = [...new Set([...account.stale, ...ids])];
+    };
+  }
   protected onDiscard(_next: SyncState, _accounts: Set<string>): void {}
   /** Whether a pending create of `target` may adopt this object (contacts: the target book holds it). */
   protected adoptionTargetMatches(acct: string, _object: ServerObject, target: string): boolean {
@@ -658,7 +675,7 @@ export abstract class ItemSync {
     const group = local ? plan.ops : prependOps(plan.ops, [insertGuard(kind, ref)]);
     return {
       group,
-      state: this.listing(kind, acct, object.id, true),
+      state: both(this.listing(kind, acct, object.id, true), this.staleWith(acct, this.dependents(kind, acct, object))),
       fresh: true,
       applied: () => {
         if (plan.effect === 'insert') this.env.report.stats.downloaded.created++;
@@ -694,7 +711,10 @@ export abstract class ItemSync {
     const plan = kind.planDownload(object, null, acct);
     return {
       group: concatGroups(ref, found.kind.planLocalDelete(found.local), plan.ops),
-      state: both(this.listing(found.kind, acct, object.id, false), this.listing(kind, acct, object.id, true)),
+      state: both(
+        both(this.listing(found.kind, acct, object.id, false), this.listing(kind, acct, object.id, true)),
+        this.staleWith(acct, this.dependents(kind, acct, object)),
+      ),
       applied: () => {
         this.env.report.stats.downloaded.updated++;
         this.markResolved(acct, object.id);

@@ -123,6 +123,8 @@ export class ContactsSync extends ItemSync {
   private uidRefs: Map<string, string[]> | null = null;
   /** Per account: raw contacts the upload phases looked at, for their memberships. */
   private readonly uploadRows = new Map<string, Set<number>>();
+  /** Group ref → ids of the contacts whose membership in it flips with the version being downloaded. */
+  private readonly refreshes = new Map<string, string[]>();
 
   constructor(env: RunEnv) {
     super(env);
@@ -409,27 +411,42 @@ export class ContactsSync extends ItemSync {
     };
   }
 
-  /** Contacts of `acct` whose membership in one of these group cards flipped since the group's shadow. */
+  /**
+   * Contacts of `acct` whose membership in one of these group cards flipped
+   * since the group's shadow; kept per group for `dependents`.
+   */
   private async membersToRefresh(acct: string, groups: Array<{ id: string; members?: Record<string, boolean> }>): Promise<string[]> {
     if (!groups.length) return [];
     const locals = await this.groupKind.loadByRefs(groups.map((g) => refOf(acct, g.id)));
-    const flipped = new Set<string>();
+    const flippedBy = new Map<string, Set<string>>();
     for (const group of groups) {
-      const before = new Set(onIds(locals.get(refOf(acct, group.id))?.shadow?.members as Record<string, boolean> | undefined));
+      const ref = refOf(acct, group.id);
+      const before = new Set(onIds(locals.get(ref)?.shadow?.members as Record<string, boolean> | undefined));
       const after = new Set(onIds(group.members));
-      for (const uid of before) if (!after.has(uid)) flipped.add(uid);
-      for (const uid of after) if (!before.has(uid)) flipped.add(uid);
+      const flipped = new Set([...before].filter((uid) => !after.has(uid)).concat([...after].filter((uid) => !before.has(uid))));
+      this.refreshes.delete(ref);
+      if (flipped.size) flippedBy.set(ref, flipped);
     }
-    if (!flipped.size) return [];
+    if (!flippedBy.size) return [];
     await this.ensureShadowIndex();
-    const out: string[] = [];
-    for (const uid of flipped) {
-      for (const ref of this.uidRefs?.get(uid) ?? []) {
-        const id = idInAccount(ref, acct);
-        if (id) out.push(id);
+    const out = new Set<string>();
+    for (const [ref, flipped] of flippedBy) {
+      const ids: string[] = [];
+      for (const uid of flipped) {
+        for (const member of this.uidRefs?.get(uid) ?? []) {
+          const id = idInAccount(member, acct);
+          if (id) ids.push(id);
+        }
       }
+      this.refreshes.set(ref, ids);
+      for (const id of ids) out.add(id);
     }
-    return out;
+    return [...out];
+  }
+
+  /** The members a group card gained or lost: refreshed in this page, or first thing next run. */
+  protected dependents(kind: Kind, acct: string, object: ServerObject): string[] {
+    return kind === this.groupKind ? this.refreshes.get(refOf(acct, object.id)) ?? [] : [];
   }
 
   protected async beforePlanning(acct: string, objects: ServerObject[]): Promise<void> {

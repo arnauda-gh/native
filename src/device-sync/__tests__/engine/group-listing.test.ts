@@ -5,6 +5,7 @@
 // row it inserted but never listed hides a later hard delete.
 
 import { describe, expect, it } from 'vitest';
+import { MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
 import { serializeSyncState } from '../../engine/sync-state';
@@ -173,6 +174,34 @@ describe('device sync engine: the groups a SyncState lists', () => {
     await h.run();
 
     expect(h.server.get('ContactCard', 'a', group)).toBeUndefined();
+  });
+
+  it("moves a group's membership on the device even when time ran out after the group's chunk", async () => {
+    const h = real();
+    const [ada, grace] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+    const uid = (id: string) => h.server.get('ContactCard', 'a', id)!.uid as string;
+    const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { [uid(ada)]: true } });
+    await h.run();
+    const members = () =>
+      h.device.rows('data')
+        .filter((d) => d.mimetype === MimeType.GROUP_MEMBERSHIP)
+        .map((d) => h.contacts().find((c) => c.id === Number(d.raw_contact_id))?.name)
+        .sort();
+    expect(members()).toEqual(['Ada Lovelace']);
+    // Another client moves the membership from Ada to Grace: only the group card changes.
+    h.server.serverUpdate('ContactCard', 'a', group, { members: { [uid(grace)]: true } });
+    // 'changes', 'download' (the group's chunk), then out of time before the members' chunk.
+    h.checkpoints.count = 0;
+    h.checkpoints.onCheckpoint = (n) => {
+      if (n === 2) h.clock.now += RUN_BUDGET;
+    };
+    expect((await h.run()).outcome).toBe('cancelled');
+    h.checkpoints.onCheckpoint = undefined;
+
+    expect((await h.run()).outcome).toBe('ok');
+
+    expect(members()).toEqual(['Grace Hopper']);
+    expect(h.state()?.accounts.a.stale).toEqual([]);
   });
 
   it('never destroys a listed group card that is in no synced book or no longer a group, and forgets it', async () => {
