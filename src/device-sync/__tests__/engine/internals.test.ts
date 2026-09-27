@@ -3,7 +3,7 @@
 // rebuild and how failures map to outcomes.
 
 import { describe, expect, it, vi } from 'vitest';
-import { BatchWriter, buildBatch, prependOps, type Work } from '../../engine/batch';
+import { BatchWriter, buildBatch, estimateBatchBytes, MAX_OPS_PER_YIELD, prependOps, type Work } from '../../engine/batch';
 import { classifyFailure, RunAbort, StateMismatch, StopRun } from '../../engine/errors';
 import { acquireLock } from '../../engine/mutex';
 import { isBackedOff, nextMarker } from '../../engine/poison';
@@ -167,6 +167,33 @@ describe('provider batches', () => {
     await writer(p).write([download, other]);
 
     expect(p.sent.slice(1)).toEqual([planned.group.ops.map((op) => ({ ...op, yieldAllowed: true })), buildBatch([other.group])]);
+  });
+
+  it('weighs a batch as the Parcel carries it: two bytes per character of its JSON and 300 per op', () => {
+    const ops: ProviderOp[] = [insert('data', { data1: 'x'.repeat(1000) }), insert('raw_contacts')];
+
+    expect(estimateBatchBytes(ops)).toBe(2 * JSON.stringify(ops).length + 2 * 300);
+    expect(estimateBatchBytes(ops)).toBeGreaterThan(2 * 1000);
+  });
+
+  it('packs batches by that weight', async () => {
+    const p = port(ok);
+    const group = (i: number): Work => ({ group: { ref: `g${i}`, ops: [insert('data', { data1: 'x'.repeat(1000) })] } });
+
+    await writer(p, { maxBytes: 2 * estimateBatchBytes(group(0).group.ops) }).write([group(0), group(1), group(2)]);
+
+    expect(p.sent.map((b) => b.length)).toEqual([2, 1]);
+  });
+
+  it('sends the state op alone after a group that fills a yield window, and with a group that leaves room', async () => {
+    const tail = () => ({ op: () => ({ op: 'syncState', value: 's' }) as ProviderOp, applied: () => undefined });
+    const group = (n: number): Work => ({ group: { ref: `g${n}`, ops: Array.from({ length: n }, () => insert('data')) } });
+    const p = port(ok);
+
+    await writer(p, { maxOps: 1000 }).write([group(MAX_OPS_PER_YIELD)], tail());
+    await writer(p, { maxOps: 1000 }).write([group(MAX_OPS_PER_YIELD - 1)], tail());
+
+    expect(p.sent.map((b) => b.length)).toEqual([MAX_OPS_PER_YIELD, 1, MAX_OPS_PER_YIELD]);
   });
 
   it('skips groups that only assert', async () => {

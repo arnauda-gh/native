@@ -58,7 +58,7 @@ export interface Tuning {
   chunkSize: number;
   /** Provider ops per applyBatch, with a yield point at every item group. */
   maxBatchOps: number;
-  /** Serialized bytes per applyBatch (the Binder budget is 1 MB for the whole transaction). */
+  /** Bytes per applyBatch as `estimateBatchBytes` counts them (the Binder budget is 1 MB for the whole transaction). */
   maxBatchBytes: number;
   /** Re-reads and re-plans of an item whose group failed an assert. */
   maxReplans: number;
@@ -94,7 +94,7 @@ export interface Tuning {
 export const DEFAULT_TUNING: Tuning = {
   chunkSize: 50,
   maxBatchOps: 400,
-  maxBatchBytes: 300_000,
+  maxBatchBytes: 500_000,
   maxReplans: 3,
   maxCreatesPerSet: 50,
   maxSetBytes: 1_000_000,

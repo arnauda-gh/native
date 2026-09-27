@@ -4,9 +4,11 @@
  *
  * - a group is never split; `refs` are rebased to the batch and the group's
  *   first op is its yield point, so the provider may commit between groups
- *   but never inside one;
- * - at most `maxOps` ops and about `maxBytes` of JSON per batch; groups that
- *   carry photo bytes travel alone (Binder budget);
+ *   but never inside one (a group of 499 ops or more is the planner's to
+ *   avoid: ContactsProvider refuses it);
+ * - at most `maxOps` ops and about `maxBytes` per batch, as
+ *   `estimateBatchBytes` counts them; groups that carry photo bytes travel
+ *   alone (Binder budget);
  * - the SyncState op, when there is one, is the last op of the last batch
  *   and never a yield point: the stored state can't get ahead of its rows.
  *
@@ -47,12 +49,22 @@ export interface Work {
 
 export interface BatchWriterOptions {
   maxOps: number;
+  /** Per batch, as `estimateBatchBytes` counts them. */
   maxBytes: number;
   maxReplans: number;
 }
 
-function sizeOf(ops: readonly ProviderOp[]): number {
-  return JSON.stringify(ops).length;
+/** Ops a provider takes up to and including one yield point (ContactsProvider throws at the 500th). */
+export const MAX_OPS_PER_YIELD = 499;
+
+/**
+ * What ops weigh in the Binder transaction of an `applyBatch`, for the batch
+ * budget and for planners that split big items: a Parcel carries strings as
+ * UTF-16 (two bytes per character of their JSON) plus about 300 bytes per op
+ * (URI, flags, value types, back-reference classes).
+ */
+export function estimateBatchBytes(ops: readonly ProviderOp[]): number {
+  return 2 * JSON.stringify(ops).length + 300 * ops.length;
 }
 
 function carriesBlob(ops: readonly ProviderOp[]): boolean {
@@ -131,8 +143,11 @@ export class BatchWriter {
     for (let i = 0; i < batches.length; i++) {
       const last = i === batches.length - 1;
       const batch = batches[i];
-      // A photo batch is already at the Binder budget: its state op goes alone.
-      const tailHere = last && tail && !(batch.length === 1 && carriesBlob(batch[0].group.ops)) ? tail : undefined;
+      // A photo batch is already at the Binder budget, and a group that fills a yield window leaves no room:
+      // the state op goes alone.
+      const photo = batch.length === 1 && carriesBlob(batch[0].group.ops);
+      const full = batch[batch.length - 1].group.ops.length >= MAX_OPS_PER_YIELD;
+      const tailHere = last && tail && !photo && !full ? tail : undefined;
       await this.applyBatch(batch, tailHere);
       if (last && tail && !tailHere) await this.applyTail(tail);
     }
@@ -156,7 +171,7 @@ export class BatchWriter {
         continue;
       }
       const n = work.group.ops.length;
-      const b = sizeOf(work.group.ops);
+      const b = estimateBatchBytes(work.group.ops);
       if (current.length && (ops + n > this.options.maxOps || bytes + b > this.options.maxBytes)) flush();
       current.push(work);
       ops += n;
