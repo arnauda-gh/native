@@ -15,7 +15,8 @@ vi.mock('../../native', () => ({
 }));
 
 import * as native from '../../native';
-import { runDeviceSyncTask, teardownAuthority } from '../../task';
+import { emptyStats } from '../../engine/report';
+import { createTaskDeps, runDeviceSyncTask, teardownAuthority } from '../../task';
 import { useDeviceSyncStore } from '../../../stores/device-sync-store';
 import type { RunPayload } from '../../types';
 
@@ -40,6 +41,17 @@ describe('device sync task', () => {
     expect(useDeviceSyncStore.getState().accounts['alice@mail.example.com']?.lastRun?.['com.android.contacts']).toMatchObject({
       outcome: 'disabled',
     });
+  });
+
+  it('reads back the status it records, for a run that did nothing to keep', async () => {
+    const deps = createTaskDeps();
+    const status = { at: 5, outcome: 'ok' as const, durationMs: 3, conflicts: 1, itemErrors: 2, stats: emptyStats() };
+
+    await deps.recordStatus('bob@mail.example.com', 'com.android.calendar', status);
+
+    await expect(deps.lastStatus('bob@mail.example.com', 'com.android.calendar')).resolves.toEqual(status);
+    await expect(deps.lastStatus('bob@mail.example.com', 'com.android.contacts')).resolves.toBeUndefined();
+    await expect(deps.lastStatus('nobody@mail.example.com', 'com.android.calendar')).resolves.toBeUndefined();
   });
 
   it('reports a failure instead of throwing, and survives a refused finishRun', async () => {

@@ -2,7 +2,7 @@
 // server: first sync, incremental /changes, uploads, echoes, selection
 // changes and groups (docs/device-sync.md, "A sync run").
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { Data, MimeType } from '../../android-columns';
 import { runDeviceSync } from '../../engine/run';
 import {
@@ -295,21 +295,22 @@ describe('device sync engine: contacts', () => {
     expect(h.server.requests.length).toBe(requests);
   });
 
-  it("keeps the last run's status (its conflicts and item errors) when an upload-only sync finds nothing to do", async () => {
+  it("keeps the last run's status when an upload-only sync finds nothing to do, moving only its time on", async () => {
     const h = createHarness();
     addServerCards(h, ['Ada']);
     await h.run();
-    const recordStatus = vi.mocked(h.deps.recordStatus);
-    const recorded = recordStatus.mock.calls.length;
+    const status = h.lastStatus()!;
+    expect(status).toMatchObject({ outcome: 'ok', stats: { downloaded: { created: 1 } } });
 
     // The upload sync Android starts right after a manual one: nothing waits on the device.
+    h.clock.now += 1_000;
     expect((await h.run(CONTACTS_AUTHORITY, { upload: true })).outcome).toBe('ok');
 
-    expect(recordStatus.mock.calls.length).toBe(recorded);
+    expect(h.lastStatus()).toEqual({ ...status, at: h.clock.now });
     // One that has something to upload is a run like any other.
     renameDeviceContact(h, h.contactNamed('Ada')!.id, 'Ada King');
     await h.run(CONTACTS_AUTHORITY, { upload: true });
-    expect(recordStatus.mock.calls.length).toBe(recorded + 1);
+    expect(h.lastStatus()).toMatchObject({ stats: { downloaded: { created: 0 }, uploaded: { updated: 1 } } });
   });
 
   it('reports disabled, unsupported and rows of another owner without touching anything', async () => {

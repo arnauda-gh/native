@@ -452,6 +452,71 @@ describe('device sync engine with the real planners', () => {
     });
   });
 
+  describe('the last run status the settings show', () => {
+    /** A run that puts back an edit the server refuses: reported once, nothing waits afterwards. */
+    async function refusedEdit() {
+      const h = real();
+      const [ada] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper']);
+      await h.run();
+      renameDeviceContact(h, h.contactNamed('Ada Lovelace')!.id, 'Ada King');
+      h.server.setErrorFor('ContactCard', 'a', ada, { type: 'forbidden' });
+      h.clock.now += 60_000;
+      expect((await h.run()).itemErrors).toEqual([expect.objectContaining({ type: 'forbidden' })]);
+      const status = h.lastStatus()!;
+      expect(status).toMatchObject({ outcome: 'ok', itemErrors: 1 });
+      return { h, status };
+    }
+
+    it('keeps what a run reported through an upload sync after it that finds nothing to do', async () => {
+      const { h, status } = await refusedEdit();
+      h.clock.now += 2_000;
+
+      await h.run(CONTACTS_AUTHORITY, { upload: true });
+
+      expect(h.lastStatus()).toEqual({ ...status, at: expect.any(Number) });
+      expect(h.lastStatus()!.at).toBeGreaterThan(status.at);
+    });
+
+    it('keeps what a run reported through a follow-up sync that finds nothing new on the server', async () => {
+      const { h, status } = await refusedEdit();
+      h.clock.now += 2_000;
+
+      expect((await h.run()).itemErrors).toEqual([]);
+
+      expect(h.lastStatus()).toEqual({ ...status, at: expect.any(Number) });
+      expect(h.lastStatus()!.at).toBeGreaterThan(status.at);
+    });
+
+    it('replaces it with a run that did something', async () => {
+      const { h } = await refusedEdit();
+      addServerCards(h, ['Linus Torvalds']);
+
+      await h.run();
+
+      expect(h.lastStatus()).toMatchObject({ outcome: 'ok', itemErrors: 0, stats: { downloaded: { created: 1 } } });
+    });
+
+    it('shows a sync that finds nothing to do after a failed one as recovered', async () => {
+      const h = real();
+      addServerCards(h, ['Ada Lovelace']);
+      await h.run();
+      renameDeviceContact(h, h.contactNamed('Ada Lovelace')!.id, 'Ada King');
+      h.server.failNextRequest('network', { match: 'ContactCard/set' });
+      expect((await h.run()).outcome).toBe('io');
+      expect(h.lastStatus()).toMatchObject({ outcome: 'io' });
+      // Uploaded by the next sync; the one after it finds nothing to do.
+      expect((await h.run()).outcome).toBe('ok');
+      h.clock.now += 2_000;
+      h.server.failNextRequest('network', { match: 'ContactCard/changes' });
+      expect((await h.run()).outcome).toBe('io');
+
+      expect((await h.run()).outcome).toBe('ok');
+
+      expect(h.lastStatus()).toMatchObject({ outcome: 'ok', itemErrors: 0, conflicts: 0 });
+      expect(h.lastStatus()).not.toHaveProperty('message');
+    });
+  });
+
   describe('a create whose target the server deleted after the claim', () => {
     it('claims a new contact again for a book that exists', async () => {
       const h = real();

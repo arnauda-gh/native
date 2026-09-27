@@ -7,13 +7,14 @@ import { BatchWriter, buildBatch, estimateBatchBytes, MAX_OPS_PER_YIELD, prepend
 import { classifyFailure, RunAbort, StateMismatch, StopRun } from '../../engine/errors';
 import { acquireLock } from '../../engine/mutex';
 import { isBackedOff, nextMarker } from '../../engine/poison';
+import { emptyStats, isQuietRun, statusToRecord } from '../../engine/report';
 import { collectionDefaultOn, isCollectionSelected } from '../../engine/selection';
 import { accountOf, emptySyncState, parseSyncState, serializeSyncState, StateStore, type SyncState } from '../../engine/sync-state';
 import { classifySetError, existingIdFromUidError, JmapCaller } from '../../jmap/caller';
 import { openWithAuthRebuild } from '../../jmap/connection';
 import { JMAPMethodError } from '../../jmap/errors';
 import { accountsWithCapability, calendarAddresses } from '../../jmap/session';
-import { JMAP_CALENDARS, JMAP_CONTACTS, type BatchResult, type ProviderOp, type ProviderPort } from '../../types';
+import { JMAP_CALENDARS, JMAP_CONTACTS, type BatchResult, type ProviderOp, type ProviderPort, type RunStats, type RunStatus } from '../../types';
 import { FakeJmapServer } from '../fakes/fake-jmap-server';
 
 function port(apply: (ops: ProviderOp[]) => BatchResult | Promise<BatchResult>): ProviderPort & { sent: ProviderOp[][] } {
@@ -457,5 +458,49 @@ describe('outcomes', () => {
     ).toMatchObject({ outcome: 'internal' });
     expect(classifyFailure(Object.assign(new Error('denied'), { code: 'permission' }), 0)).toMatchObject({ outcome: 'permission' });
     expect(classifyFailure(new TypeError('x is undefined'), 0)).toMatchObject({ outcome: 'internal' });
+  });
+});
+
+describe('the status a run leaves for the settings', () => {
+  const status = (over: Partial<RunStatus> = {}): RunStatus => ({ at: 2_000, outcome: 'ok', durationMs: 50, conflicts: 0, itemErrors: 0, stats: emptyStats(), ...over });
+  const withStats = (edit: (stats: RunStats) => void) => {
+    const stats = emptyStats();
+    edit(stats);
+    return status({ stats });
+  };
+  const reported = status({ at: 1_000, durationMs: 900, conflicts: 1, itemErrors: 2, message: 'invitations not sent', stats: { ...emptyStats(), skipped: 2 } });
+
+  it('keeps what the run before reported through a run that did nothing, moving the time on', () => {
+    expect(isQuietRun(status())).toBe(true);
+    expect(statusToRecord(status(), reported)).toEqual({ ...reported, at: 2_000 });
+    expect(statusToRecord(status(), undefined)).toEqual(status());
+  });
+
+  it('shows a failure followed by a run that did nothing as recovered, with what the failed run reported', () => {
+    const failed = { ...reported, outcome: 'io' as const, message: 'Could not reach the server' };
+    const recorded = statusToRecord(status(), failed);
+
+    expect(recorded).toEqual({ at: 2_000, outcome: 'ok', durationMs: 900, conflicts: 1, itemErrors: 2, stats: reported.stats });
+  });
+
+  it('replaces it with a run that wrote, skipped or reported anything, or failed', () => {
+    const busy = [
+      withStats((s) => (s.downloaded.created = 1)),
+      withStats((s) => (s.downloaded.deleted = 1)),
+      withStats((s) => (s.uploaded.updated = 1)),
+      withStats((s) => (s.skipped = 1)),
+      status({ conflicts: 1 }),
+      status({ itemErrors: 1 }),
+      status({ message: 'invitations not sent' }),
+      status({ outcome: 'io', message: 'Could not reach the server' }),
+      status({ outcome: 'cancelled' }),
+      status({ outcome: 'disabled', message: 'Sync is off for this account' }),
+    ];
+    for (const run of busy) {
+      expect(isQuietRun(run)).toBe(false);
+      expect(statusToRecord(run, reported)).toBe(run);
+    }
+    // Items only looked at are no work.
+    expect(isQuietRun(withStats((s) => (s.entries = 3)))).toBe(true);
   });
 });

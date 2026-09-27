@@ -93,3 +93,37 @@ export function statusOf(report: RunReport, itemErrorCount = report.itemErrors.l
   if (report.message) status.message = report.message;
   return status;
 }
+
+const wrote =(counts: RunStats['downloaded']) => counts.created + counts.updated + counts.deleted > 0;
+
+/** A run that wrote nothing either way and had nothing to report: no conflict, item error, note or failure. */
+export function isQuietRun(status: RunStatus): boolean {
+  const { stats } = status;
+  return (
+    status.outcome === 'ok' &&
+    !status.conflicts &&
+    !status.itemErrors &&
+    !status.message &&
+    !stats.skipped &&
+    !wrote(stats.downloaded) &&
+    !wrote(stats.uploaded)
+  );
+}
+
+/**
+ * The status the settings keep after a run. A quiet run (`isQuietRun`: the
+ * upload sync Android starts after a manual one, the follow-up sync the
+ * adapter asks for when changes arrived during a run, a manual sync right
+ * after an automatic one) keeps what the run before it reported, its
+ * conflicts, item errors and counts, and moves only the time on: otherwise
+ * a put-back edit or a conflict is reported for a second and gone. Its
+ * outcome is its own, so a failure before it shows as recovered, without the
+ * failure's message. Any other run replaces the status, so a problem stays
+ * only until the next run that does something.
+ */
+export function statusToRecord(status: RunStatus, previous: RunStatus | undefined): RunStatus {
+  if (!previous || !isQuietRun(status)) return status;
+  const kept: RunStatus = { ...previous, at: status.at, outcome: status.outcome };
+  if (previous.outcome !== 'ok') delete kept.message;
+  return kept;
+}

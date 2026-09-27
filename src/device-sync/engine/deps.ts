@@ -39,6 +39,8 @@ export interface EngineDeps {
   deviceZone(): string;
   /** The last run's status for the settings UI. */
   recordStatus(registryId: string, authority: Authority, status: RunStatus): void | Promise<void>;
+  /** The status `recordStatus` stored last, if any (a run that did nothing keeps its details). */
+  lastStatus(registryId: string, authority: Authority): RunStatus | undefined | Promise<RunStatus | undefined>;
   /** The latest state the engine synced for a JMAP account and type, so the app skips the echo of our own writes. */
   recordKnownState(registryId: string, jmapAccountId: string, type: string, state: string): void | Promise<void>;
   /** One notification that deep-links to sign-in, after an auth failure the rebuild did not fix. */

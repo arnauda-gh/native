@@ -19,6 +19,7 @@ import {
   type ProviderPort,
   type RunExtras,
   type RunReport,
+  type RunStatus,
   type Row,
 } from '../../types';
 import { FakeDeviceProviders } from '../fakes/fake-provider';
@@ -67,6 +68,8 @@ export interface Harness {
   nameDataRow(rawContactId: number): Row | undefined;
   events(): Row[];
   serverNames(accountId?: string): string[];
+  /** The status the runs recorded last for the settings (what `deps.lastStatus` answers). */
+  lastStatus(authority?: Authority): RunStatus | undefined;
 }
 
 export function createHarness(options: { tuning?: Partial<Tuning>; accounts?: 'personal' | 'withShared'; rebuild?: boolean } = {}): Harness {
@@ -84,6 +87,7 @@ export function createHarness(options: { tuning?: Partial<Tuning>; accounts?: 'p
   const prefs: AccountSyncPrefs = { contactsSelection: {}, calendarSelection: {}, reminderOwner: 'device' };
   const checkpoints: Harness['checkpoints'] = { count: 0, crashAt: null };
   const batches: Harness['batches'] = { applied: 0, crashAfter: null, log: [] };
+  const statuses = new Map<Authority, RunStatus>();
 
   const wrap = (port: ProviderPort): ProviderPort => ({
     accountName: port.accountName,
@@ -119,7 +123,10 @@ export function createHarness(options: { tuning?: Partial<Tuning>; accounts?: 'p
     subscriptionCalendars: async () => [],
     isSyncEnabled: async () => true,
     deviceZone: () => 'Europe/Berlin',
-    recordStatus: vi.fn(),
+    recordStatus: vi.fn((_registryId: string, authority: Authority, status: RunStatus) => {
+      statuses.set(authority, status);
+    }),
+    lastStatus: (_registryId, authority) => statuses.get(authority),
     recordKnownState: vi.fn(),
     notifyAuthProblem: vi.fn(),
     yieldThread: async () => undefined,
@@ -168,6 +175,7 @@ export function createHarness(options: { tuning?: Partial<Tuning>; accounts?: 'p
         .filter((c) => c.kind !== 'group')
         .map((c) => String((c.name as { full?: string } | undefined)?.full ?? ''))
         .sort(),
+    lastStatus: (authority = CONTACTS_AUTHORITY) => statuses.get(authority),
   };
   return harness;
 }

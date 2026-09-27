@@ -16,7 +16,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { detectDeviceLocale, isSupportedLocale, translate, type LocaleCode } from '../i18n';
 import { randomBytes } from '../lib/random';
-import { accountSyncPrefs, useDeviceSyncStore, waitForDeviceSyncHydration } from '../stores/device-sync-store';
+import { accountDeviceSync, accountSyncPrefs, useDeviceSyncStore, waitForDeviceSyncHydration } from '../stores/device-sync-store';
 import type { RandomSource } from './common/ids';
 import {
   runDeviceSync,
@@ -123,6 +123,10 @@ export function createTaskDeps(): EngineDeps {
     recordStatus: async (registryId, authority, status) => {
       await waitForDeviceSyncHydration();
       useDeviceSyncStore.getState().recordRunStatus(registryId, authority, status);
+    },
+    lastStatus: async (registryId, authority) => {
+      await waitForDeviceSyncHydration();
+      return accountDeviceSync(registryId).lastRun[authority];
     },
     recordKnownState: async (registryId, jmapAccountId, type, state) => {
       await waitForDeviceSyncHydration();
