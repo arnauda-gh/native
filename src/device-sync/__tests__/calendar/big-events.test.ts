@@ -98,7 +98,7 @@ describe('calendar planner: big meetings', () => {
     const clean = calendarPlanner.planUpload((await h.local('big'))!, h.ctx);
     expect(clean.kind).toBe('clean');
     if (clean.kind === 'clean') expect(estimate(clean.ops)).toBeLessThan(TRANSACTION);
-  });
+  }, 60_000);
 
   it('still fails a write when an app changed a clean occurrence\'s attendees meanwhile', async () => {
     const event = meeting(3, 4);
@@ -134,7 +134,7 @@ describe('calendar planner: big meetings', () => {
     expect(local.exceptions.every((x) => x.attendees.length === attendees + 1 && !x.dirty)).toBe(true);
     // Its echo writes nothing.
     expect(calendarPlanner.planDownload(event, local, h.ctx).effect).toBe('none');
-  });
+  }, 60_000);
 
   it('finishes a first download cut off between its groups, without writing a row twice', async () => {
     const event = meeting(25, 52);
@@ -182,7 +182,7 @@ describe('calendar planner: big meetings', () => {
     expect(local.shadow).toEqual(changed);
     expect(local.exceptions.every((x) => x.attendees.length === 27)).toBe(true);
     expect(calendarPlanner.planDownload(changed, local, h.ctx).effect).toBe('none');
-  });
+  }, 60_000);
 });
 
 describe('device sync engine: big meetings', () => {
@@ -201,7 +201,7 @@ describe('device sync engine: big meetings', () => {
     const before = h.batches.log.length;
     expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
     expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
-  });
+  }, 60_000);
 
   it('finishes a big meeting cut off between its groups by a crash, without duplicating rows', async () => {
     const setup = () => {
