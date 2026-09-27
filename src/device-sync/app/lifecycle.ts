@@ -623,7 +623,23 @@ export async function syncNow(registryId: string, authority: Authority): Promise
   return true;
 }
 
-/** Android's sync screen of the account ("Android account settings", "Review deletions"). */
+/**
+ * After a run held back many deletions made on the device
+ * (`tooManyDeletions`): delete those items on the server too, or bring them
+ * back on the device from the server. Android's own screens offer neither.
+ */
+export async function resolveDeletions(registryId: string, authority: Authority, choice: 'delete' | 'restore'): Promise<boolean> {
+  const accountName = accountDeviceSync(registryId).androidAccountName;
+  if (!deviceSyncAvailable() || !accountName) return false;
+  await requestSync(
+    accountName,
+    authority,
+    choice === 'delete' ? { manual: true, overrideTooManyDeletions: true } : { manual: true, discardLocalDeletions: true },
+  );
+  return true;
+}
+
+/** Android's sync screen of the account ("Android account settings"). */
 export async function openAndroidAccountSettings(registryId: string): Promise<boolean> {
   const accountName = accountDeviceSync(registryId).androidAccountName;
   if (!deviceSyncAvailable() || !accountName) return false;

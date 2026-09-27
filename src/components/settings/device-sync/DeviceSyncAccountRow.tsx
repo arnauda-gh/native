@@ -29,6 +29,7 @@ import {
   disableDeviceSync,
   enableDeviceSync,
   openAndroidAccountSettings,
+  resolveDeletions,
   resumeDeviceSync,
   syncNow,
 } from '../../../device-sync/app/lifecycle';
@@ -224,10 +225,30 @@ export function DeviceSyncAccountRow({ account, authority }: Props) {
     void refresh();
   };
 
+  const reviewDeletions = () => {
+    const resolve = (choice: 'delete' | 'restore') => {
+      void resolveDeletions(account.id, authority, choice)
+        .catch((err: unknown) => alertFailed(err instanceof Error ? err.message : String(err)))
+        .finally(() => { void refresh(); });
+    };
+    Alert.alert(
+      t('settings.device_sync.deletions_title', 'Delete them on the server too?'),
+      t(
+        'settings.device_sync.deletions_message',
+        'Many items were deleted on this device at once, so they were not deleted on the server. Delete them there as well, or bring them back on this device.',
+      ),
+      [
+        { text: t('common.cancel', 'Cancel'), style: 'cancel' },
+        { text: t('settings.device_sync.deletions_restore', 'Bring them back'), onPress: () => resolve('restore') },
+        { text: t('settings.device_sync.deletions_delete', 'Delete on server'), style: 'destructive', onPress: () => resolve('delete') },
+      ],
+    );
+  };
+
   const runAction = (action: StatusAction) => {
     if (action === 'signIn') navigation.navigate('AddAccount');
     else if (action === 'grantAccess') void grantAccess();
-    else void openAndroidAccountSettings(account.id);
+    else reviewDeletions();
   };
 
   const closeChooser = (changed: boolean) => {

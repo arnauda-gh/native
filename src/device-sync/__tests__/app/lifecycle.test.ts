@@ -108,6 +108,7 @@ import {
   reconcileDeviceAccounts,
   releaseDeviceSyncBeforeSignOut,
   removeSuspendedAccount,
+  resolveDeletions,
   resumeDeviceSync,
   TEARDOWN_TIMEOUT_MS,
 } from '../../app/lifecycle';
@@ -483,6 +484,19 @@ describe('sign-in', () => {
 });
 
 describe('settings actions', () => {
+  it('deletes held-back deletions on the server, or brings the items back, with a sync', async () => {
+    await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    h.state.log = [];
+    expect(await resolveDeletions(ALICE, CONTACTS_AUTHORITY, 'delete')).toBe(true);
+    expect(await resolveDeletions(ALICE, CONTACTS_AUTHORITY, 'restore')).toBe(true);
+    expect(h.state.log).toEqual([
+      `sync alice ${CONTACTS_AUTHORITY} {"manual":true,"overrideTooManyDeletions":true}`,
+      `sync alice ${CONTACTS_AUTHORITY} {"manual":true,"discardLocalDeletions":true}`,
+    ]);
+    // Without an Android account there is nothing to resolve.
+    expect(await resolveDeletions(BOB, CONTACTS_AUTHORITY, 'delete')).toBe(false);
+  });
+
   it('applies a new interval to Android while the authority syncs', async () => {
     await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
     h.state.log = [];
