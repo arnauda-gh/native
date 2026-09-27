@@ -154,6 +154,11 @@ android {
         versionCode appVersionCode.toInteger()
         versionName appVersionName
 
+        // Android account type of device sync (#34), derived from the package
+        // name so a later rename needs no other change. The XML in res/xml and
+        // the Kotlin in sync/ read it as @string/device_sync_account_type.
+        resValue "string", "device_sync_account_type", "${applicationId}.account"
+
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
     signingConfigs {
@@ -279,6 +284,11 @@ dependencies {
     // NOTE: 3.3.2-3.3.4 are built with Kotlin 2.3 and break this project's
     // Kotlin 2.1 toolchain; 3.3.5 went back to 2.2 which it can read.
     implementation("org.unifiedpush.android:connector:3.3.5")
+
+    // JVM unit tests for the logic in the Kotlin shell of device sync (src/test).
+    // android.jar only stubs org.json, so the tests use the real one.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";

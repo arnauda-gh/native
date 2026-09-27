@@ -18,6 +18,7 @@ import {
   startCalendarReminderTapHandling,
 } from './src/lib/calendar-notifications';
 import { startLivenessMonitor } from './src/lib/connection-liveness';
+import { startDeviceSyncTriggers } from './src/device-sync/app/triggers';
 import {
   setPendingCalendarOpen,
   type CalendarReminderTarget,
@@ -412,6 +413,9 @@ export default function App() {
     // Calendar reminders are kept scheduled from launch, not only once the
     // Calendar tab has been opened.
     startCalendarNotificationSync();
+    // Device sync (Android, #34): live changes, the app's own edits and the
+    // foreground ask Android to sync; accounts are checked against Android's.
+    startDeviceSyncTriggers();
     return useNetworkStore.getState().init();
   }, []);
 

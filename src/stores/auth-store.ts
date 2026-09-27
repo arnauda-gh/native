@@ -26,6 +26,7 @@ import {
   teardownPushNotifications,
   teardownPushNotificationsForAccount,
 } from '../lib/push-notifications';
+import { deviceSyncSignedIn, releaseDeviceSyncBeforeSignOut } from '../device-sync/app/lifecycle';
 
 // Persist middleware hydrates asynchronously on cold start. Without this
 // guard, restoreSession() can read the account-store before AsyncStorage has
@@ -303,6 +304,8 @@ async function completeOAuthHandoff(
   // mounted; the screen joins this load.
   void useEmailStore.getState().fetchMailboxes();
   void syncAccountDisplayName(accountId);
+  // Device sync (#34): drop a "sign in again" notice, resume a suspended account.
+  void deviceSyncSignedIn(accountId);
 }
 
 function applyConnectedState(
@@ -390,6 +393,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // mounted; the screen joins this load.
       void useEmailStore.getState().fetchMailboxes();
       void syncAccountDisplayName(accountId);
+      // Device sync (#34): drop a "sign in again" notice, resume a suspended account.
+      void deviceSyncSignedIn(accountId);
     } catch (err) {
       if (err instanceof Error && err.name === 'TotpRequiredError') {
         // Keep what the user (or the webmail hand-off) supplied so the code
@@ -571,6 +576,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const accountStore = useAccountStore.getState();
     const currentId = get().activeAccountId;
 
+    // Device sync (#34): upload what this device changed and remove the
+    // Android account while the credentials are still here. When changes
+    // could not be uploaded the user is asked, and may stay signed in.
+    if (currentId && !(await releaseDeviceSyncBeforeSignOut([currentId]))) return;
+
     // Best-effort: revoke this account's JMAP PushSubscription and drop its
     // relay mapping before we lose credentials. Other logged-in accounts'
     // push setups remain untouched. Do not abort logout on failure.
@@ -621,6 +631,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   logoutAll: async () => {
     const accountStore = useAccountStore.getState();
     const ids = accountStore.accounts.map((a) => a.id);
+    // Device sync (#34): as in logout, for every account.
+    if (!(await releaseDeviceSyncBeforeSignOut(ids))) return;
     await teardownPushNotifications().catch(() => undefined);
     for (const id of ids) await revokeStoredRefreshToken(id);
     await jmapClient.clearAllCredentials(ids);
@@ -737,6 +749,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     const accountStore = useAccountStore.getState();
     if (!accountStore.getAccountById(accountId)) return;
+    // Device sync (#34): as in logout.
+    if (!(await releaseDeviceSyncBeforeSignOut([accountId]))) return;
     await teardownPushNotificationsForAccount(accountId).catch(() => undefined);
     await revokeStoredRefreshToken(accountId);
     await jmapClient.clearAccountCredentials(accountId).catch(() => undefined);

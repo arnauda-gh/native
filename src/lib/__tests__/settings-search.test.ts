@@ -93,6 +93,7 @@ describe('settings search index (English catalog)', () => {
     downloads: 'DownloadsSettings.tsx',
     security: 'AccountSecuritySettings.tsx',
     calendar: 'CalendarSettings.tsx',
+    contacts: 'ContactsSettings.tsx',
     files: 'FilesSettings.tsx',
     sidebar_apps: 'SidebarAppsSettings.tsx',
     about_data: 'AboutDataSettings.tsx',
@@ -119,6 +120,20 @@ describe('settings search index (English catalog)', () => {
     // Webmail-only settings are not offered.
     expect(labelsFor('calendar')).not.toContain('Free scrolling');
     expect(labelsFor('notifications')).not.toContain('Notification sound');
+  });
+
+  it('finds device sync in Contacts and Calendar on Android (#34)', () => {
+    // The tests run as Android (src/test-setup.ts).
+    expect(labelsFor('contacts')).toContain('Sync to this device');
+    expect(labelsFor('calendar')).toContain('Sync to this device');
+    const index = buildSettingsSearchIndex(en, tEn);
+    expect(subResultsForQuery(index, 'contacts', 'contacts app')).toEqual([
+      {
+        label: 'Sync to this device',
+        description: 'Show your address books in the Contacts app and other apps on this device. Changes sync both ways.',
+      },
+    ]);
+    expect(tabMatchesQuery(index, 'calendar', 'Calendar', 'android')).toBe(true);
   });
 });
 

@@ -9,12 +9,19 @@ import {
 } from '../api/push';
 import { getMailboxes, getSharedMailboxes } from '../api/email';
 import { loadedMailboxes } from './mailbox-source';
-import { jmapClient } from '../api/jmap-client';
-import { JMAPMethodError } from '../api/jmap-result';
+import { jmapClient, JMAPClient } from '../api/jmap-client';
+import { JMAPMethodError, requireMethodResult } from '../api/jmap-result';
 import { CAPABILITIES } from '../api/types';
-import type { EmailPushConfig, JMAPAccountInfo, Mailbox } from '../api/types';
+import type { EmailPushConfig, JMAPAccountInfo, JMAPSession, Mailbox } from '../api/types';
 import { generateAccountId } from './account-utils';
 import { t } from '../stores/locale-store';
+import {
+  authorityOfType,
+  DEVICE_SYNC_STORAGE_KEY,
+  deviceSyncPushTypes,
+  persistedAccounts,
+} from '../device-sync/app/prefs';
+import { CALENDAR_AUTHORITY, CONTACTS_AUTHORITY, type Authority } from '../device-sync/types';
 import {
   getUnifiedPushDistributors,
   isUnifiedPushSupported,
@@ -206,6 +213,38 @@ export function isValidRelayUrl(value: string): boolean {
 // In-app sync uses the separate SSE channel and is unaffected.
 export const PUSH_TYPES = ['EmailDelivery'] as const;
 
+// The capability a server advertises for the data types of an authority.
+const DEVICE_SYNC_CAPABILITIES: Record<Authority, string> = {
+  [CONTACTS_AUTHORITY]: CAPABILITIES.CONTACTS,
+  [CALENDAR_AUTHORITY]: CAPABILITIES.CALENDARS,
+};
+
+/**
+ * The push types of one account's subscription: `EmailDelivery`, plus the
+ * contact and calendar types while the account syncs them to the device
+ * (#34, docs/device-sync.md "Triggers"): the native push router turns those
+ * into device syncs, and a push carrying only them never notifies. Only the
+ * types of a capability the account's session advertises: a server without
+ * contacts or calendars may refuse the whole subscription over them.
+ *
+ * Read from the device sync store's persisted JSON rather than the store, so
+ * code that runs without it (the push task) never creates it.
+ */
+export async function pushTypesFor(accountId: string, session: JMAPSession | null): Promise<string[]> {
+  let extra: string[] = [];
+  try {
+    const capabilities = session?.capabilities ?? {};
+    extra = deviceSyncPushTypes(persistedAccounts(await AsyncStorage.getItem(DEVICE_SYNC_STORAGE_KEY))[accountId])
+      .filter((type) => {
+        const authority = authorityOfType(type);
+        return !!authority && DEVICE_SYNC_CAPABILITIES[authority] in capabilities;
+      });
+  } catch {
+    extra = [];
+  }
+  return [...PUSH_TYPES, ...extra];
+}
+
 // draft-ietf-jmap-emailpush (Stalwart >= 0.16.16). `EmailDelivery` alone
 // still fires for every ingested message - including spam the server files
 // straight into Junk - because the server can't know which folders a client
@@ -381,6 +420,24 @@ async function writeWithEmailPush<T>(
       if (!forbidden || i === attempts.length - 1) throw err;
       logPhase('jmap', 'emailPush map refused, retrying with fewer accounts');
     }
+  }
+}
+
+/**
+ * Run a subscription write with the account's push types and, when the server
+ * refuses it while they include device sync's, once more with the mail types
+ * alone: mail push never depends on device sync (#34).
+ */
+async function writeWithPushTypes<T>(
+  types: readonly string[],
+  write: (types: readonly string[]) => Promise<T>,
+): Promise<T> {
+  try {
+    return await write(types);
+  } catch (err) {
+    if (sameTypes(types, PUSH_TYPES)) throw err;
+    logPhase('jmap', 'push types refused, retrying with the mail types alone');
+    return write(PUSH_TYPES);
   }
 }
 
@@ -927,6 +984,7 @@ async function setupPushNotificationsInner(
     : null;
   const subKey = subscriptionIdKey(accountId);
   const storedServerId = await AsyncStorage.getItem(subKey);
+  const types = await pushTypesFor(accountId, jmapClient.currentSession);
   let jmapAccountId: string | null = null;
   try {
     jmapAccountId = jmapClient.accountId;
@@ -939,7 +997,7 @@ async function setupPushNotificationsInner(
     if (match) {
       if (match.expires) await AsyncStorage.setItem(subscriptionExpiresKey(accountId), match.expires);
       if (!params.forceRecreate) {
-        const refreshed = await refreshSubscriptionExpires(match, emailPush);
+        const refreshed = await refreshSubscriptionExpires(match, emailPush, types);
         if (refreshed) {
           await rememberRefusedEmailPushAccounts(accountId, refusedBefore, emailPush, refreshed.emailPush);
           await addPushAccountId(accountId);
@@ -985,14 +1043,16 @@ async function setupPushNotificationsInner(
   let serverAssignedId: string;
   let serverExpires: string | null;
   try {
-    const created = await writeWithEmailPush(emailPush, (filter) =>
-      createPushSubscription({
-        deviceClientId,
-        url: buildRelayUrl(relayBaseUrl, `/api/push/jmap/${encodeURIComponent(deviceClientId)}`),
-        types: [...PUSH_TYPES],
-        expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
-        ...(filter ? { emailPush: filter } : {}),
-      }),
+    const created = await writeWithPushTypes(types, (wanted) =>
+      writeWithEmailPush(emailPush, (filter) =>
+        createPushSubscription({
+          deviceClientId,
+          url: buildRelayUrl(relayBaseUrl, `/api/push/jmap/${encodeURIComponent(deviceClientId)}`),
+          types: [...wanted],
+          expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
+          ...(filter ? { emailPush: filter } : {}),
+        }),
+      ),
     );
     serverAssignedId = created.result.id;
     serverExpires = created.result.expires;
@@ -1040,8 +1100,9 @@ async function addPushAccountId(accountId: string): Promise<void> {
 // Push the subscription's expires forward when it's getting close to the
 // server's ceiling, and re-sync `types` / the delivery filter when they drift
 // from what this client wants (a subscription created by an older build still
-// listens to `Email`/`Mailbox`; a Junk mailbox id can change under us).
-// Returns false if the server rejects the update, which the caller treats as
+// listens to `Email`/`Mailbox`; device sync was turned on or off; a Junk
+// mailbox id can change under us). Returns false if the server rejects the
+// update, also with the mail types alone, which the caller treats as
 // "replace"; otherwise the emailPush map the update installed (null when it
 // left the filter alone).
 async function refreshSubscriptionExpires(
@@ -1053,8 +1114,9 @@ async function refreshSubscriptionExpires(
   },
   // null when the server has no emailPush support - leave the property alone.
   desiredEmailPush: Record<string, EmailPushConfig> | null,
+  types: readonly string[],
 ): Promise<false | { emailPush: Record<string, EmailPushConfig> | null }> {
-  const typesNeedUpdate = !sameTypes(sub.types, PUSH_TYPES);
+  const typesNeedUpdate = !sameTypes(sub.types, types);
   const emailPushNeedsUpdate =
     desiredEmailPush !== null && !sameEmailPush(sub.emailPush, desiredEmailPush);
   if (!typesNeedUpdate && !emailPushNeedsUpdate && sub.expires) {
@@ -1066,15 +1128,17 @@ async function refreshSubscriptionExpires(
     }
   }
   try {
-    const patch: { expires?: string; types?: string[] } = {
-      expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
-    };
-    if (typesNeedUpdate) patch.types = [...PUSH_TYPES];
-    const { emailPush } = await writeWithEmailPush(
-      emailPushNeedsUpdate ? desiredEmailPush : null,
-      (filter) => updatePushSubscription(sub.id, filter ? { ...patch, emailPush: filter } : patch),
-    );
-    return { emailPush };
+    return await writeWithPushTypes(types, async (wanted) => {
+      const patch: { expires?: string; types?: string[] } = {
+        expires: expiresFromNow(SUBSCRIPTION_EXPIRES_DAYS),
+      };
+      if (!sameTypes(sub.types, wanted)) patch.types = [...wanted];
+      const { emailPush } = await writeWithEmailPush(
+        emailPushNeedsUpdate ? desiredEmailPush : null,
+        (filter) => updatePushSubscription(sub.id, filter ? { ...patch, emailPush: filter } : patch),
+      );
+      return { emailPush };
+    });
   } catch {
     return false;
   }
@@ -1196,6 +1260,48 @@ export async function resyncPushNotifications(
     return null;
   }
   return setupPushNotifications(params);
+}
+
+/**
+ * Re-apply an account's push types to its subscription after device sync was
+ * turned on or off for it (#34). The account the client serves goes through
+ * the api/push helpers; another signed-in account through a client of its
+ * own, never the singleton. Best effort: the next resync of the account
+ * applies them anyway.
+ */
+export async function refreshPushSubscriptionTypes(accountId: string): Promise<void> {
+  if (await AsyncStorage.getItem(optedOutKey(accountId))) return;
+  const subscriptionId = await AsyncStorage.getItem(subscriptionIdKey(accountId));
+  if (!subscriptionId) return;
+  const username = jmapClient.username;
+  const serverUrl = jmapClient.serverUrl;
+  const served = !!username && !!serverUrl && generateAccountId(username, serverUrl) === accountId;
+  try {
+    if (served) {
+      const types = await pushTypesFor(accountId, jmapClient.currentSession);
+      const current = (await listPushSubscriptions()).find((s) => s.id === subscriptionId);
+      if (!current || sameTypes(current.types, types)) return;
+      await updatePushSubscription(subscriptionId, { types: [...types] });
+      return;
+    }
+    const client = new JMAPClient();
+    if (!(await client.loadAccount(accountId))) return;
+    const types = await pushTypesFor(accountId, client.currentSession);
+    const using = [CAPABILITIES.CORE];
+    const res = await client.request(
+      [['PushSubscription/get', { ids: [subscriptionId], properties: ['id', 'types'] }, '0']],
+      using,
+    );
+    const current = (requireMethodResult(res, '0', 'PushSubscription/get').list as Array<{ id: string; types?: string[] | null }> | undefined)
+      ?.find((s) => s.id === subscriptionId);
+    if (!current || sameTypes(current.types, types)) return;
+    await client.request(
+      [['PushSubscription/set', { update: { [subscriptionId]: { types: [...types] } } }, '0']],
+      using,
+    );
+  } catch {
+    // The next resync re-applies them.
+  }
 }
 
 /**

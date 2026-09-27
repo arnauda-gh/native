@@ -40,6 +40,11 @@ const TRANSLATED_PANES: Record<string, string[]> = {
   'settings/UpdatesSettings.tsx': [],
   'settings/VacationSettings.tsx': ['YYYY-MM-DD HH:MM'],
   'settings/settings-section.tsx': [],
+  // Device sync (Android, #34).
+  'settings/device-sync/DeviceSyncSection.tsx': [],
+  'settings/device-sync/DeviceSyncAccountRow.tsx': [],
+  'settings/device-sync/DeviceSyncCollectionsSheet.tsx': [],
+  'settings/device-sync/status.ts': [],
   'filters/FilterRuleModal.tsx': [],
   'filters/SieveEditorSheet.tsx': [],
 };

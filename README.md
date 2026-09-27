@@ -22,11 +22,12 @@ React Native (Expo SDK 54) client for [Bulwark Webmail](https://github.com/bulwa
 - Calendar (basic)
 - Contacts (basic)
 - Push notifications via the Bulwark relay - FCM by default, or [UnifiedPush](https://unifiedpush.org) (e.g. ntfy) for devices without Google Play services
+- Android: contacts and calendars sync both ways with the phone's Contacts and Calendar apps (Settings → Contacts / Calendar → Sync to this device)
 - In-app sideload updates from GitHub Releases
 
 ## What's missing or rough
 
-- iOS builds, but push notifications and client certificates are Android-only so far
+- iOS builds, but push notifications, client certificates and syncing with the phone's contacts and calendars are Android-only so far
 - S/MIME, plugins, themes - UI stubs only (filters & rules, the vacation responder and file storage are real implementations)
 - Calendar editing is partial; contacts editing is basic
 - No Play Store distribution yet (sideload APK from Releases); iOS ships via TestFlight

@@ -15,6 +15,14 @@ AppRegistry.registerHeadlessTask('BulwarkPushTask', () => async (data: Parameter
   await Promise.allSettled([pushBackgroundTask(data), refreshWidgetsInBackground()]);
 });
 
+// Device sync (Android, #34): the contacts and calendar sync adapters run the
+// sync engine through this task, headless or next to the UI. The engine is
+// required on first use so an app start does not load it.
+AppRegistry.registerHeadlessTask('BulwarkDeviceSync', () => async (data: import('./src/device-sync/types').RunPayload) => {
+  const { runDeviceSyncTask } = require('./src/device-sync/task') as typeof import('./src/device-sync/task');
+  await runDeviceSyncTask(data);
+});
+
 // Home-screen widgets (Android): every widget event runs this headless task.
 registerWidgetTaskHandler(widgetTaskHandler);
 
