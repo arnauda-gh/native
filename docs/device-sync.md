@@ -173,7 +173,10 @@ the system UID.
    failing to start (the boot task faults, e.g. a debug build without Metro),
    or the deadline: 9.5 minutes, or 2.5 minutes when the sync runs as an
    expedited job (`schedule_as_expedited_job`), inside JobScheduler's 10 and 3
-   minute guarantees.
+   minute guarantees. HeadlessJs stops waiting for React Native, and removes
+   its listener, once a context is ready, the start task faults, or 10
+   minutes passed, so a context that comes up after the adapter gave up
+   starts nothing.
 5. Maps the report onto `SyncResult`; no report is a soft error.
 
 `onSyncCanceled` interrupts the sync thread; the run is closed, and JS sees
@@ -396,7 +399,9 @@ deadline reports `cancelled` with `moreRecordsToGet`.
      ContactsProvider and CalendarProvider schedule an upload sync for every
      account 30 s after any app write, other accounts' included. A pending
      reconcile, objects on `stale` or objects in `created` make it a full
-     run.
+     run. A raw contact or group deleted before a run claimed it (no
+     `SOURCE_ID`, no pending create) does not count: it never reached the
+     server, and the next run purges it.
    - `new JMAPClient().loadAccount(registryId)`: `false` or
      `AuthenticationError` → rebuild once (another client may have rotated
      the refresh token); still failing → `auth`, plus one notification that
@@ -445,14 +450,11 @@ deadline reports `cancelled` with `moreRecordsToGet`.
      takes only the identity and shadow, and its deletion then uploads by id.
    - Each object is [merged](#merge-rules) into its rows. An object that left
      every selected collection loses its rows only when they are clean; a
-     dirty or deleted item is merged like any change first (a deleted one's
-     shadow follows the server, so its deletion is decided on the server's
-     version), so its upload builds on the server's version, and its rows go
-     once the upload is accepted. A full reconcile downloads such objects the
-     same way. The calendar planner places an event only in a synced
-     calendar, so an edited event that left all of them is not merged: it goes
-     on `stale` (reported as `plannerError`) and its changes wait on the
-     device; a deleted one's deletion is decided on its last shadow.
+     dirty or deleted item is merged like any change first (an event into the
+     calendar its rows are in; a deleted one's shadow follows the server, so
+     its deletion is decided on the server's version), so its upload builds
+     on the server's version, and its rows go once the upload is accepted. A
+     full reconcile downloads such objects the same way.
    - An object whose rows could not be written (a planner error, a provider
      refusal that re-planning did not fix) goes on `stale`, and the page's
      state still advances.
@@ -471,7 +473,14 @@ deadline reports `cancelled` with `moreRecordsToGet`.
    owner](#reminder-owner)).
 6. **Report** counts, conflicts, per-item errors and duration; persist the
    status for the settings UI; call `finishRun` before the task's promise
-   settles (JS timers stop once the task is over).
+   settles (JS timers stop once the task is over). A run that wrote nothing
+   either way, skipped nothing and reported no conflict, item error, note or
+   failure (the upload sync Android starts after a manual one, the adapter's
+   follow-up when changes arrived during a run, a manual sync right after
+   another) keeps the previous status's conflicts, item errors and counts
+   and moves only its time on; after a failed run it shows `ok`, without the
+   failure's message. Any other run replaces the status, so a problem shows
+   until the next run that does something.
 
 `/get` always lists `properties` explicitly: with `properties: null` Stalwart
 leaves out JMAP-only fields such as `useDefaultAlerts`, and `ids: null` returns
@@ -651,7 +660,10 @@ re-inserts every attendee as a required attendee and rebuilds the RRULE from its
 own model (FREQ, INTERVAL, COUNT or UNTIL, one BYDAY or BYMONTHDAY=-1,
 BYMONTH). For an event it changed, attendee type and relationship changes are
 ignored, and a rule change is applied part by part onto the shadow's rule: parts
-Fossify models and changed are patched, parts it dropped stay.
+Fossify models and changed are patched, parts it dropped stay. Etar's move
+re-inserts every attendee but the user as a required attendee without a
+status; a pair takes those rows as they are, and the accepted write puts the
+server's back.
 
 ### Key reconciliation (downloads)
 
@@ -693,7 +705,12 @@ Whole-object rules:
   would resurrect something the user removed. The download writes only the
   new version into the item's shadow, so the deletion is judged by the
   object's current collections: one the server meanwhile also filed in a
-  collection this device does not sync only leaves the synced ones.
+  collection this device does not sync only leaves the synced ones. Except
+  when the edit moved the object out of every collection its rows were
+  written for (contacts: `SYNC1`; events: the row's calendar) and into none
+  the device syncs: the deletion is then moot, only the rows go, and the
+  object stays where it is. Group rows record no address books, so a group
+  card deleted on the device is destroyed even then.
 - Delete on both → purge, no conflict.
 - A server object whose `uid` differs from the shadow's is a different object:
   its rows are replaced, never patched.
@@ -744,10 +761,12 @@ several commits, which can apply partially), one request in flight, and one
   event to another calendar that way, and turns a recurring series into a
   single event (or edits "this and following" from its first instance) the
   same way. A deleted row and a new row of the same run whose projections
-  match apart from the calendar (or the rule) are uploaded as a patch of the
-  existing object (`calendarIds` swapped; `recurrenceRule: null` with its
-  overrides removed); the new row takes the identity and the exception rows
-  of the old one, which is purged. Rows of different JMAP accounts never
+  match apart from the calendar or the rule (attendees by address, the
+  user's own left out: Etar's copy of a meeting has no row for the user, or
+  one as its organizer when the user was not listed) are uploaded as a patch
+  of the existing object (`calendarIds` swapped; `recurrenceRule: null` with
+  its overrides removed); the new row takes the identity and the exception
+  rows of the old one, which is purged. Rows of different JMAP accounts never
   pair: that move is a create in the target account, identity written, and
   later in the run a destroy in the source, whose echo finds no rows left to
   change. Unpaired rows are ordinary creates and deletions. Pairs go up
@@ -764,9 +783,9 @@ several commits, which can apply partially), one request in flight, and one
   write then waits for that upload. Such a change keeps the device's value
   even where the server changed the same field meanwhile: the download of the
   deleted row refreshes only its shadow, so no merge sees the conflict.
-  Attendee rows of the new row are the app's re-insert (Etar writes every
-  attendee as required, without a status): only their addresses count, for
-  the pairing. A new row without reminder rows is taken to have copied none,
+  Attendee rows of the new row are the app's re-insert (see [Lossy calendar
+  editors](#lossy-calendar-editors)): only their addresses count, for the
+  pairing. A new row without reminder rows is taken to have copied none,
   not to have deleted them. The old row's exception rows (Etar copies only
   those it never synced) move to the new row with their pending edits; a
   series turned single has none left.
@@ -818,7 +837,16 @@ several commits, which can apply partially), one request in flight, and one
   Then the rows are purged with sync-adapter deletes (for events also their
   exceptions, by id: a sync-adapter delete removes only the row itself).
   `notFound` counts as done. A deleted row without identity but with a pending
-  create is looked up first and destroyed if found.
+  create is looked up first and destroyed if found. One without a pending
+  create (a contact or group created and deleted on the device between two
+  runs: ContactsProvider soft-deletes those too) never reached the server:
+  the claim step purges it, nothing uploads, and it never counts as a waiting
+  change. A deletion is decided on the server's current version (the
+  download merges a deleted item's shadow first): when that holds none of
+  the collections the rows were written for and none the device syncs, it is
+  moot and only the rows are purged. A collection deselected on the device
+  since still counts as the rows' own, and an object moved into another
+  collection the device syncs is not moot either: those deletions go up.
 - **Afterwards**: a `/get` of every touched id (a separate request for creates:
   Stalwart does not resolve result references to `/set`). The result becomes
   the new shadow, and the rows' baselines are refreshed from it, in one group
@@ -1177,7 +1205,16 @@ location clears it for that occurrence. An override without them shows the
 series' ones, so while the series has a description or location the override
 gets the empty text, or one location without a name (Stalwart writes no
 LOCATION line for an empty map, which would read back as the series'
-locations); otherwise the override's own value is removed.
+locations); otherwise the override's own value is removed. A cleared colour
+gets the empty colour while the series has one (calcard keeps an empty
+COLOR; the device shows the calendar's colour). Removing every reminder of
+one occurrence can be stored only while the series has no alerts of its own:
+the override leaves the calendar's defaults (`useDefaultAlerts: false`) and
+has none. Otherwise the occurrence would show the series' alerts (an
+override is its own VEVENT, and an empty map writes no VALARM), so the
+change is put back and reported as `remindersNotRepresentable`; when the
+occurrence has other changes, those upload and their accepted write puts the
+reminders back.
 
 The first override of an event with none sends the whole `recurrenceOverrides`
 map (a patch below a missing property fails).
@@ -1238,7 +1275,14 @@ app asks who should remind the user, per account:
 
 - **the calendar app** (default when Bulwark's reminders are off): Reminders
   rows are written, and Bulwark's own scheduler skips events of the synced
-  calendars of that account (tasks keep their reminders);
+  calendars of that account (tasks keep their reminders) while the device
+  calendar receives them. It does not while the account's calendar sync is
+  paused in Android settings, Android's auto-sync is off (Android then runs
+  manual syncs only, and the periodic, pushed and app-triggered syncs are not
+  manual) or the calendar permission is revoked, nor before the app read
+  Android's side: a double reminder is better than a missed one. The app
+  reads it when the scheduler starts and each time it schedules, and
+  schedules again when the answer changed;
 - **Bulwark**: no Reminders rows; `MAX_REMINDERS=0` on the account's calendars
   so apps offer no reminder editor; reminder rows an app adds anyway are neither
   uploaded nor deleted.
@@ -1381,7 +1425,11 @@ Scoping, enforced in Kotlin for every op
   499 ops or more; about 500 KB per call as `estimateBatchBytes` weighs it (2
   bytes per character of the ops' JSON plus 300 bytes per op: the Parcel
   carries UTF-16 strings); `TransactionTooLargeException` resolves as
-  `tooLarge` so JS splits the batch. `OperationApplicationException` resolves
+  `tooLarge` so JS splits the batch. An item too big for one batch comes as
+  a chain of groups (`OpGroup.next`): the engine applies them in order, each
+  in a batch of its own; a group that fails an assert has the item planned
+  again from what the earlier ones wrote, any other failure gives it up (on
+  `stale`). `OperationApplicationException` resolves
   as `assert` (except the provider's own "too many operations" and failed
   inserts, `provider`), `SecurityException` as `permission`. The whole batch
   is also refused (`scope`) once the Android account is gone, so no rows
@@ -1479,7 +1527,9 @@ app's system settings when Android no longer asks.
   changes would be lost; "stay signed in" keeps the accounts syncing. Several
   accounts are released in parallel, a toast says it is working, and an
   internal error never blocks signing out (the next reconcile suspends what
-  was left).
+  was left). The release waits for a turn-on or turn-off of the account that
+  is under way (they run one at a time per account); one asked for while it
+  runs comes after it and does nothing once the account was released.
 - **Registry evictions** (the app drops an account on its own, e.g. after an
   `AuthenticationError`): reconciling Android accounts against the registry at
   launch, on foreground and whenever accounts of our type change finds an
@@ -1503,7 +1553,8 @@ app's system settings when Android no longer asks.
 - An Android account that exists without a registry id (created, then the
   app died before writing it) is adopted by the next `ensureAccount`; one
   with another registry id is refused (`conflict`) and the app uses the
-  registry id as the account name instead.
+  registry id as the account name instead. Any other failure to add the
+  account fails the turn-on.
 - **Uninstall:** Android removes the accounts of an uninstalled authenticator,
   and the providers delete their rows.
 - **Permission revoked:** Android fails the sync before our code runs
@@ -1529,27 +1580,38 @@ app's system settings when Android no longer asks.
   authority, and the launch counts as one. Edits that change no device row
   (tasks, calendar sharing, the default collections) request nothing. These
   are ordinary requests, which Android drops while the account is paused.
-- A push with no readable `changed` map (older relays) starts the mail task
-  as before and requests no syncs; periodic syncs cover those setups.
+- A push with no readable `changed` map (older relays), or one that names no
+  type, starts the mail task as before and requests no syncs; periodic syncs
+  cover those setups. An account entry that is not an object may be mail too;
+  the other entries are still routed.
 - Every run that uploads gets one follow-up sync: the server's push of our
   own change arrives while the run is open, and SyncManager drops a request
   matching the running sync, so the run asks for another one when it ends.
   The follow-up finds nothing to do, so it stays one.
 - **App closed:** while an account has device sync on, its push subscription
   adds `ContactCard`, `AddressBook` (contacts) and `CalendarEvent`, `Calendar`
-  (calendar) to `EmailDelivery`, per account. Turning sync on or off updates
-  the subscription right away; for a signed-in account other than the one the
-  UI serves, through a client of its own, never the UI's singleton. The relay
+  (calendar) to `EmailDelivery`, per account, when the account's session
+  advertises `urn:ietf:params:jmap:contacts` or
+  `urn:ietf:params:jmap:calendars`. A server that refuses a subscription
+  write carrying them gets it again with `EmailDelivery` alone, so mail push
+  never depends on device sync. Turning sync on or off updates the
+  subscription right away; for a signed-in account other than the one the UI
+  serves, through a client of its own, never the UI's singleton. The relay
   forwards the StateChange's `changed` map verbatim (FCM data key `changed`;
   only its first account key is repeated as `accountId`). A native router in
   the FCM and UnifiedPush services walks every account key of `changed`, maps
   contact and calendar types to `requestSync` through the routes JS stored
   (`setPushRoutes`; the device-sync layer refreshes them whenever the device
-  sync preferences change), and starts the mail push task only when some
-  account's map has `EmailDelivery`. A guard at the top of
-  `pushBackgroundTask` returns for StateChanges without `EmailDelivery`, so a
-  contact change can never take the legacy "notify the newest unread mail"
-  path.
+  sync preferences change), and starts the mail push task only when the push
+  may carry mail: anything but a StateChange (an EmailPush), a map it can't
+  read or that names no type, an account entry it can't read, or a type that
+  may mean new mail in some account's map: `EmailDelivery`, or
+  `Email`/`Mailbox`, which new mail changes too (a subscription made by an
+  older build listens to them until the launch-time resync replaces its
+  types, and a server without `EmailDelivery` has only them). A guard at the
+  top of `pushBackgroundTask` (`carriesNoMail`) applies the same rules,
+  tested with the same cases, so a contact or calendar change can never take
+  the legacy "notify the newest unread mail" path.
 
 ## Failure matrix
 
@@ -1563,7 +1625,7 @@ app's system settings when Android no longer asks.
 | Permission revoked | Android fails the sync (`databaseError`) | "Grant access" in settings |
 | `cannotCalculateChanges` | full reconcile of that JMAP account | automatic |
 | Server `SetError` on an item | notFound on an update → local delete (a pair's new row too); forbidden with scheduling → retried without it ("invitations not sent" once that is accepted); forbidden on an update → rows rewritten in place from the server's current version, on a deletion → the item comes back from the server, both reported as `forbidden`; forbidden on a create, and the rest → poisoned with back-off, listed in the report | automatic / user fixes the item |
-| A device change the server can't take (a read-only collection, an answer where none is allowed, an instance without its series, an in-place move to another account's calendar, a membership of a group the device can't change) | put back on the device without a request, listed in the report as `readOnly`, `rsvpRefused`, `instanceOnly`, `crossAccountMove` or `groupNotWritable` | — |
+| A device change the server can't take (a read-only collection, an answer where none is allowed, an instance without its series, an in-place move to another account's calendar, a membership of a group the device can't change, every reminder removed from one occurrence of a series with alerts of its own) | put back on the device without a request, listed in the report as `readOnly`, `rsvpRefused`, `instanceOnly`, `crossAccountMove`, `groupNotWritable` or `remindersNotRepresentable` | — |
 | A whole `/set` refused for an account (`accountReadOnly`, `forbidden`, `accountNotFound`, `accountNotSupportedByMethod`) | that account's items wait, the report lists the account; the other accounts go on | automatic once the account takes writes |
 | A shared account refuses to list its address books or calendars (`forbidden`, `accountNotFound`, `accountNotSupportedByMethod`) | the account is left out of the run and only logged; its rows stay untouched | automatic once it lists them again |
 | A planner throws on an item | download: the object goes on `stale`; upload: the item is skipped (`plannerError`); the rest of the run goes on | fixed in code; listed in the report |
@@ -1595,10 +1657,14 @@ app's system settings when Android no longer asks.
   or 50 events per chunk.
 - A recurring meeting with many attendees on many occurrences is big: 25
   attendees on 52 overrides weigh about 2 MB of provider ops on its first
-  download (the shadow alone about 0.56 MB), more than one Binder transaction
-  (1 MB). Writes after an edit take about 0.65 MB. The engine writes an event
-  in one group, so such an event does not reach a device that downloads it
-  for the first time: it stays on `stale`.
+  download, more than one Binder transaction (1 MB). Such an event is written
+  as a chain of groups of at most 500 KB and 498 ops each: a new one master
+  first (with its identity), then its exception rows, then its shadow (one
+  column, about 0.56 MB here); a write into an existing one exception rows
+  first and the master with its new shadow last. A run cut off between two
+  groups is finished by the next one, planned from the old shadow. An event
+  whose shadow alone is over a transaction does not sync (`tooLarge`,
+  reported).
 - JS thread: a `setTimeout(0)` yield between chunks, so the UI keeps rendering
   when the app is open (a teardown, which the UI starts, yields without
   timers: React Native pauses them while the app is in the background and no
@@ -1624,12 +1690,15 @@ The 2,000 + 2,000 scale run is in [Verification](#verification).
 - **Engine** (vitest): `src/device-sync/__tests__/fakes/fake-provider.ts`, an
   in-memory ProviderPort with DIRTY/DELETED/VERSION, soft/hard deletes,
   asserts, back-references, yield points (and a batch committed up to a yield
-  point before it fails) and user-edit helpers (AOSP-style in-place edits and
-  Fossify-style delete+reinsert); and a fake JMAP server
-  for ContactCard/CalendarEvent/AddressBook/Calendar with `/changes`,
-  `cannotCalculateChanges`, `ifInState`, SetError injection, the async uid
-  index and Stalwart's key behaviour. Crash injection at every checkpoint;
-  poison items; the deletion guards; echo suppression; an edit during upload.
+  point before it fails), STATUS without a default, photos within the 96 px
+  thumbnail kept as the thumbnail alone, and a Binder budget per batch
+  (`estimateBatchBytes`, a photo by its bytes), with user-edit helpers
+  (AOSP-style in-place edits, Fossify-style delete+reinsert, Etar's move);
+  and a fake JMAP server for ContactCard/CalendarEvent/AddressBook/Calendar
+  with `/changes`, `cannotCalculateChanges`, `ifInState`, SetError injection,
+  the async uid index and Stalwart's key behaviour and its dropping of empty
+  maps, inside overrides too. Crash injection at every checkpoint; poison
+  items; the deletion guards; echo suppression; an edit during upload.
 - **Kotlin** (JUnit, `gradlew :app:testDebugUnitTest`): report mapping, op and
   URI translation, scoping.
 - **Device** (API 34 and 32 emulators, local Stalwart only): the scenarios in
@@ -1648,7 +1717,8 @@ The 2,000 + 2,000 scale run is in [Verification](#verification).
 Decisions made where the brief left a choice (safe defaults):
 
 - Default reminder owner when Bulwark's reminders are off: the calendar app.
-- Delete on the device + edit on the server: the delete wins.
+- Delete on the device + edit on the server: the delete wins, unless the edit
+  moved the object out of the device's collections.
 - Deletion threshold: > 50 and > 20 % of the authority's objects.
 - Full-reconcile safety: more than 10 device rows against an empty server.
 - Turning a Contacts/Calendar toggle off in Android Settings pauses sync and
@@ -1718,9 +1788,34 @@ Known limitations:
   off after a daylight-saving change (it expands the rule without the zone's
   DST change); Google Calendar and Etar show them right. The rows are
   correct.
-- A recurring meeting too big for one provider transaction on its first
-  download (about 25 attendees on 52 overrides) does not reach the device;
-  see [Limits and performance](#limits-and-performance).
+- An event whose shadow alone is over one provider transaction does not sync
+  (`tooLarge`, reported). A big event the server replaced under a reused id
+  (another `uid`) is written as one group and can fail the same way.
+- A move made on the device whose patch fails with a poisoning error
+  (`invalidPatch`, `tooLarge`) leaves the event twice on the server until the
+  back-off ends; then the move ends as a create plus a destroy (a new uid). A
+  `forbidden` (a move out of a calendar the user can't write, say) ends as a
+  copy in the target calendar while the original stays; the refusal is
+  reported.
+- When the device changed a field with a move or before it, and the server
+  changed the same field meanwhile, the device's value wins: the pair does
+  not see the conflict (see [Uploads](#uploads)).
+- Google Calendar has no move: its "Copy to" plus a deletion pairs only when
+  both reach the same sync (within the 30 s before the upload sync, say);
+  otherwise the copy uploads as a new event (a new uid, without the
+  original's unmapped properties). Seen on the API 34 emulator.
+- Google Calendar copies the series' reminders onto an occurrence it edits,
+  so that occurrence keeps its own reminders afterwards. A new exception row
+  an app inserts without reminders inherits the series' reminders, also when
+  the user removed them all in the app's "this event" editor. Removing every
+  reminder of one occurrence of a series with reminders of its own can't be
+  stored on Stalwart: it is put back and reported
+  (`remindersNotRepresentable`).
+- Etar writes an answer saved together with a move to the old row, so the
+  answer is lost with that row.
+- A group card deleted on the device that another client moved out of the
+  synced address books is destroyed anyway: group rows record no address
+  books (see [Merge rules](#merge-rules)).
 - Descriptions over 64 KB are shown truncated and are not uploaded when edited.
 - A shared address book or calendar that two signed-in accounts can both see
   appears once per account when both sync it (each Android account holds its
@@ -1737,10 +1832,9 @@ Known limitations:
   spans two parts, the server's address keeps the whole line as its street:
   `full` and the components agree, but city, postcode and country are no
   longer separate parts.
-- The settings show the status of the last run only, and an upload sync the
-  providers scheduled after an app write replaces it even when it finds
-  nothing to do: the conflicts and item errors of the run before can
-  disappear from the section moments after it.
+- The settings' status line shows how many items could not be synced, never
+  conflicts: those resolve on their own (the server wins), and the stored run
+  counts them.
 - Read-only address books and calendars and subscribed calendars were not
   verified on a device (the test server had none); their handling is covered
   by tests only.
@@ -1817,13 +1911,18 @@ apps or in Stalwart is under [known limitations](#decisions-and-limitations).
   removes and restores the rows without server writes or duplicates; an
   account removed in Android Settings is not added back by the app; signing
   out removes the rows and the Android account.
-- **Covered by tests only:** contact groups and memberships, photos too
-  large for the device, moves between calendars and a series turned into a
-  single event (Etar's delete and insert), events and exceptions Google
-  Calendar creates without a status, a device create the server deletes
-  before the next download, changes put back because the server can't take
-  them, an address edited as one line in AOSP Contacts, and the "Review
-  deletions" question in the settings.
+- **Covered by tests only:** contact groups and memberships; photos too
+  large for the device; meetings too big for one transaction; moves between
+  calendars and a series turned into a single event (Etar's delete and
+  insert, meetings included); events and exceptions Google Calendar creates
+  without a status; a device create the server deletes before the next
+  download; a deletion of an object another client moved away meanwhile; a
+  contact created and deleted between two syncs; changes put back because
+  the server can't take them, an occurrence's cleared colour and removed
+  reminders among them; an address edited as one line in AOSP Contacts; the
+  status kept after a run that did nothing; the "Review deletions" question;
+  Bulwark's reminders while the device calendar can't sync; the push rules;
+  and signing out during a turn-on.
 
 Scale, with a debug build (JavaScript from Metro in dev mode) on an API 34
 emulator given 4 GB of memory: 2,000 cards and 2,000 events (100 of them
