@@ -15,6 +15,7 @@ import {
   createHarness,
   renameDeviceContact,
   rowWrites,
+  RUN_BUDGET,
   type Harness,
 } from './harness';
 
@@ -292,6 +293,62 @@ describe('device sync engine with the real planners', () => {
       const row = h.events().find((e) => e.title === 'Lunch')!;
       expect(h.device.rows('reminders').filter((r) => Number(r.event_id) === Number(row._id)).map((r) => r.minutes)).toEqual([15]);
       expect(h.events().map((e) => e.title).sort()).toEqual(['Lunch', 'Retrospective']);
+    });
+  });
+
+  describe('a deletion the teardown uploads', () => {
+    /** The contacts planner as fixed for data finding 4: a deleted contact's shadow follows the server. */
+    function refreshingDeletedShadows(h: Harness): void {
+      h.deps.planners = {
+        ...h.deps.planners,
+        contacts: {
+          ...contactsPlanner,
+          planDownload: (card, local, ctx) => {
+            if (!local?.deleted || !local.sourceId) return contactsPlanner.planDownload(card, local, ctx);
+            const shadow = JSON.stringify({ ...card, '~memberOf': local.shadow?.['~memberOf'] ?? [] });
+            const ops = [{ op: 'update' as const, table: 'raw_contacts' as const, id: local.rawContactId, values: { sync2: shadow } }];
+            return { ops: { ref: local.sourceId, ops }, conflicts: 0, stillDirty: true, effect: 'update' as const, writes: 1 };
+          },
+        },
+      };
+    }
+
+    it('is decided on the server version when the server changed since the last sync', async () => {
+      const h = real();
+      const archive = h.server.addAddressBook('a', { name: 'Archive' });
+      h.prefs.contactsSelection[`a/${archive}`] = false;
+      const [ada] = addServerCards(h, ['Ada Lovelace']);
+      await h.run();
+      refreshingDeletedShadows(h);
+      h.device.user.deleteContact(h.contactNamed('Ada Lovelace')!.id);
+      // Meanwhile another client files Ada in Archive too.
+      h.server.serverUpdate('ContactCard', 'a', ada, { [`addressBookIds/${archive}`]: true });
+
+      expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+
+      expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ addressBookIds: { [archive]: true } });
+      expect((h.server.get('ContactCard', 'a', ada)!.addressBookIds as object)).not.toHaveProperty(h.book);
+    });
+
+    it('waits, with the edits, while no state guards the upload (the first sync never ended)', async () => {
+      const h = real();
+      const [ada] = addServerCards(h, ['Ada Lovelace', 'Grace Hopper', ...Array.from({ length: 60 }, (_, i) => `P${i}`)]);
+      // The first sync (a full reconcile) runs out of time after its first chunk (Ada and Grace): no state yet.
+      h.checkpoints.onCheckpoint = (n) => {
+        if (n === 3) h.clock.now += RUN_BUDGET;
+      };
+      expect((await h.run()).outcome).toBe('cancelled');
+      h.checkpoints.onCheckpoint = undefined;
+      expect(h.state()?.accounts.a.itemsState).toBeNull();
+      renameDeviceContact(h, h.contactNamed('Ada Lovelace')!.id, 'Ada King');
+      h.device.user.deleteContact(h.contactNamed('Grace Hopper')!.id);
+      addDeviceContact(h, 'Hedy Lamarr');
+      // Meanwhile another client changes Ada.
+      h.server.serverUpdate('ContactCard', 'a', ada, { 'name/full': 'Ada, Countess of Lovelace' });
+
+      expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 2 });
+
+      expect(h.serverNames().filter((n) => !/^P\d+$/.test(n))).toEqual(['Ada, Countess of Lovelace', 'Grace Hopper', 'Hedy Lamarr']);
     });
   });
 

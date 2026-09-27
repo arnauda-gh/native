@@ -800,14 +800,19 @@ export abstract class ItemSync {
    */
   protected async uploadAll(): Promise<void> {
     const accounts = this.accountIds();
-    for (const acct of accounts) await this.withRetries(acct, () => this.pairPhase(acct));
+    // A teardown downloads nothing first: `ifInState` is what keeps its uploads from overwriting a server change.
+    // An account without a stored state (its first sync never ended) uploads only new items; the rest waits.
+    const guarded = accounts.filter((acct) => this.env.mode !== 'teardown' || !!this.env.store.account(acct).itemsState);
+    for (const acct of guarded) await this.withRetries(acct, () => this.pairPhase(acct));
     await this.claimNewItems();
     const deletionsAllowed = await this.deletionPolicy(await this.loadUploadItems());
-    for (const acct of accounts) await this.withRetries(acct, () => this.prePhase(acct));
+    for (const acct of guarded) await this.withRetries(acct, () => this.prePhase(acct));
     for (const phase of ['create', 'update', 'delete'] as const) {
-      for (const acct of accounts) await this.withRetries(acct, () => this.phase(acct, phase, deletionsAllowed));
+      for (const acct of phase === 'create' ? accounts : guarded) {
+        await this.withRetries(acct, () => this.phase(acct, phase, deletionsAllowed));
+      }
     }
-    for (const acct of accounts) await this.withRetries(acct, () => this.extraPhase(acct, deletionsAllowed));
+    for (const acct of guarded) await this.withRetries(acct, () => this.extraPhase(acct, deletionsAllowed));
     for (const acct of accounts) await this.adoptExtraCreated(acct);
   }
 
