@@ -5,9 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { Attendees, Events } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
-import { estimateBatchBytes } from '../../engine/batch';
 import type { OpGroup } from '../../planner';
-import { CALENDAR_AUTHORITY, type ProviderPort } from '../../types';
+import { CALENDAR_AUTHORITY } from '../../types';
 import type { CalendarEventWire } from '../../wire';
 import { createHarness, rowWrites, type Harness as EngineHarness } from '../engine/harness';
 import { Harness, ME, serverApply } from './harness';
@@ -47,23 +46,10 @@ function meeting(attendees: number, overrides: number, me = ME, calendarId = 'b'
   } as unknown as CalendarEventWire;
 }
 
-/** The engine with the real planners, its provider refusing a batch bigger than one Binder transaction (as Android does). */
-function engineWithBinderLimit(): EngineHarness {
+/** The engine with the real planners (the fake provider refuses a batch over one Binder transaction, as Android does). */
+function engineWithRealPlanners(): EngineHarness {
   const h = createHarness();
   h.deps.planners = { contacts: contactsPlanner, calendar: calendarPlanner };
-  const base = h.deps.provider;
-  h.deps.provider = (name, authority): ProviderPort => {
-    const port = base(name, authority);
-    return {
-      accountName: port.accountName,
-      authority: port.authority,
-      query: (q) => port.query(q),
-      readSyncState: () => port.readSyncState(),
-      readPhoto: (id, px) => port.readPhoto(id, px),
-      applyBatch: async (ops) =>
-        estimateBatchBytes(ops) > TRANSACTION ? { ok: false, reason: 'tooLarge', message: 'TransactionTooLargeException' } : port.applyBatch(ops),
-    };
-  };
   return h;
 }
 
@@ -204,7 +190,7 @@ describe('device sync engine: big meetings', () => {
     [25, 52],
     [100, 12],
   ])('downloads a meeting of %i attendees on %i overrides in several transactions', async (attendees, overrides) => {
-    const h = engineWithBinderLimit();
+    const h = engineWithRealPlanners();
     const { id: _drop, ...event } = meeting(attendees, overrides, 'alice@example.com', h.calendar) as unknown as Record<string, unknown>;
     const id = h.server.addEvent('a', event);
 
@@ -219,7 +205,7 @@ describe('device sync engine: big meetings', () => {
 
   it('finishes a big meeting cut off between its groups by a crash, without duplicating rows', async () => {
     const setup = () => {
-      const h = engineWithBinderLimit();
+      const h = engineWithRealPlanners();
       const { id: _drop, ...event } = meeting(25, 52, 'alice@example.com', h.calendar) as unknown as Record<string, unknown>;
       return { h, id: h.server.addEvent('a', event) };
     };

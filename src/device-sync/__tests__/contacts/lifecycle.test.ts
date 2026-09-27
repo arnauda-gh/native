@@ -80,8 +80,7 @@ describe('contacts lifecycle', () => {
     const h = new Harness();
     h.blobs.set('B1', JPEG);
     const { id, rawId } = await h.seed({ name: { full: 'Blob Photo' }, media: { p: { kind: 'photo', blobId: 'B1', mediaType: 'image/jpeg' } } });
-    const photo = h.rowsByKey(rawId)['media:p'];
-    expect(h.device.photo(Number(photo.data14))).toBe(JPEG);
+    expect((await h.port.readPhoto(rawId, 512))?.jpegBase64).toBe(JPEG);
     expect((await h.contact(rawId)).shadow?.media).toEqual({ p: { kind: 'photo', blobId: 'B1', mediaType: 'image/jpeg' } });
     await expectSettled(h, id, rawId);
   });
@@ -164,7 +163,7 @@ describe('contacts lifecycle', () => {
     h.blobs.set('B1', JPEG);
     h.server.serverUpdate('ContactCard', JMAP, id, { 'emails/e1/address': 'c@example.org' });
     await h.download(id);
-    expect(h.device.photo(Number(h.rowsByKey(rawId)['media:p'].data14))).toBe(JPEG);
+    expect((await h.port.readPhoto(rawId, 512))?.jpegBase64).toBe(JPEG);
     await expectSettled(h, id, rawId);
   });
 
@@ -188,7 +187,6 @@ describe('contacts lifecycle', () => {
 
     it('keeps one row through downloads and merges, and never reads it as deleted', async () => {
       const h = new Harness();
-      h.thumbnailPhotos = true;
       const { id, rawId } = await h.seed(small());
       expect(photos(h, rawId)).toMatchObject([{ data14: null, data_sync1: 'media:ph' }]);
       await expectSettled(h, id, rawId);
@@ -220,7 +218,6 @@ describe('contacts lifecycle', () => {
 
     it('heals the photo rows the same photo was inserted as again, keeping one and the server photo', async () => {
       const h = new Harness();
-      h.thumbnailPhotos = true;
       const { id, rawId } = await h.seed(small());
       const [row] = photos(h, rawId);
       const again = { [Data.MIMETYPE]: MimeType.PHOTO, [Data.DATA15]: { b64: JPEG }, data_sync1: row.data_sync1, data_sync2: row.data_sync2, data_sync3: row.data_sync3 };

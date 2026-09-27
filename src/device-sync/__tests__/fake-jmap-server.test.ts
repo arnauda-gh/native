@@ -429,6 +429,29 @@ describe('FakeJmapServer', () => {
       expect(server.get('CalendarEvent', 'a', id)?.updated).toBe('2026-09-27T10:02:00Z');
     });
 
+    it('drops empty maps inside overrides too, which an override VEVENT cannot hold', async () => {
+      const { server, port, cal } = setup();
+      const id = server.addEvent('a', {
+        title: 'Standup',
+        start: '2026-09-28T09:00:00',
+        recurrenceRule: { frequency: 'daily' },
+        alerts: { al1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M' } } },
+        recurrenceOverrides: { '2026-09-29T09:00:00': { title: 'Late', alerts: { a2: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT1H' } } } } },
+        calendarIds: { [cal]: true },
+      });
+
+      await call(port, 'CalendarEvent/set', {
+        accountId: 'a',
+        update: { [id]: { 'recurrenceOverrides/2026-09-29T09:00:00/alerts': {}, 'recurrenceOverrides/2026-09-29T09:00:00/locations': {} } },
+      });
+
+      // Read back without them, so the occurrence shows the series' alerts again, as on Stalwart.
+      const override = (server.get('CalendarEvent', 'a', id)?.recurrenceOverrides as Record<string, Record<string, unknown>>)['2026-09-29T09:00:00'];
+      expect(override).toMatchObject({ title: 'Late' });
+      expect(override).not.toHaveProperty('alerts');
+      expect(override).not.toHaveProperty('locations');
+    });
+
     it('leaves useDefaultAlerts out of properties: null and returns it when listed', async () => {
       const { server, port, cal } = setup();
       const id = server.addEvent('a', { title: 'x', useDefaultAlerts: true, calendarIds: { [cal]: true } });

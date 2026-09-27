@@ -25,6 +25,12 @@
  *   owner, all-day times are zeroed in UTC and `P<n>S` all-day durations become
  *   `P<n>D`, while `PT0S`-style all-day durations, NULL STATUS updates,
  *   SELF_ATTENDEE_STATUS updates and RRULEs with unknown parts fail the batch.
+ *   STATUS has no default: an event an app inserts without one holds NULL.
+ * - Photos, as PhotoProcessor keeps them: one within the 96 px thumbnail is
+ *   the thumbnail alone (PHOTO_FILE_ID NULL), a bigger one (or bytes that are
+ *   no JPEG or PNG) a display photo with a file id; DATA15 never reads back.
+ * - A batch over one Binder transaction (`estimateBatchBytes` over 1 MB, by
+ *   default) fails with `tooLarge`.
  * - Scoping: rows of other accounts are invisible and untouchable.
  * - The native bridge's rules (android/.../sync/ProviderOps.kt and
  *   ProviderScope.kt): an op with `id` expects exactly one row unless it says
@@ -74,6 +80,7 @@ import {
   type WriteCell,
   type WriteRow,
 } from '../../types';
+import { estimateBatchBytes } from '../../engine/batch';
 import { compileOrderBy, compileWhere, whereColumns } from './fake-sql';
 
 export const FAKE_ACCOUNT_TYPE = 'com.anonymous.bulwarkmobile.account';
@@ -240,7 +247,7 @@ export interface FakeProviderOptions {
   accountType?: string;
   /** Derive/split names and addresses like ContactsProvider (default true). */
   normalize?: boolean;
-  /** Byte budget of one applyBatch before it fails with `tooLarge` (default 1 MB). */
+  /** Bytes of one applyBatch, as `estimateBatchBytes` weighs them, before it fails with `tooLarge` (default 1 MB). */
   maxBatchBytes?: number;
 }
 
@@ -517,7 +524,7 @@ export class FakeDeviceProviders {
       record(false);
       return { ok: false, reason, message };
     }
-    if (JSON.stringify(ops).length > this.maxBatchBytes) {
+    if (parcelBytes(ops) > this.maxBatchBytes) {
       record(false);
       return { ok: false, reason: 'tooLarge', message: 'TransactionTooLargeException' };
     }
@@ -567,6 +574,26 @@ export class FakeDeviceProviders {
   /** @internal */ setSyncState(accountName: string, authority: Authority, value: string): void {
     this.syncState.set(`${authority}|${accountName}`, value);
   }
+}
+
+/**
+ * What a batch weighs in its Binder transaction: `estimateBatchBytes`, with a
+ * photo blob counted by its bytes (the native side hands ContentValues a
+ * decoded `byte[]`, not the base64 text).
+ */
+function parcelBytes(ops: readonly ProviderOp[]): number {
+  let blobs = 0;
+  const texts = ops.map((op) => {
+    if (op.op !== 'insert' && op.op !== 'update') return op;
+    const values = { ...op.values };
+    for (const [column, value] of Object.entries(values)) {
+      if (value === null || typeof value !== 'object') continue;
+      blobs += Math.floor((value.b64.length * 3) / 4);
+      values[column] = null;
+    }
+    return { ...op, values };
+  });
+  return estimateBatchBytes(texts) + blobs;
 }
 
 function cloneTables(tables: Tables): Tables {
@@ -642,8 +669,11 @@ class FakePort implements ProviderPort {
     }
     for (const row of this.fake.table('data').values()) {
       if (row[Data.RAW_CONTACT_ID] === rawContactId && row[Data.MIMETYPE] === MimeType.PHOTO) {
-        const fileId = row[Data.DATA14] === null ? null : Number(row[Data.DATA14]);
-        const b64 = fileId === null ? undefined : this.fake.photo(fileId);
+        const fileId = row[Data.DATA14] === null || row[Data.DATA14] === undefined ? null : Number(row[Data.DATA14]);
+        // A photo kept as its thumbnail alone is read from the thumbnail.
+        const thumbnail = row[Data.DATA15];
+        if (fileId === null) return typeof thumbnail === 'string' && thumbnail.startsWith('blob:') ? { jpegBase64: thumbnail.slice(5), fileId: null } : null;
+        const b64 = this.fake.photo(fileId);
         return b64 === undefined ? null : { jpegBase64: b64, fileId };
       }
     }
@@ -755,10 +785,19 @@ class BatchApplier {
     return out;
   }
 
-  /** A photo row's full-size bytes become a stored display photo plus a file id, like PhotoProcessor. */
+  /**
+   * A photo row's full-size bytes, as PhotoProcessor keeps them: within the
+   * 96 px thumbnail as the thumbnail alone (PHOTO_FILE_ID NULL, the bytes kept
+   * for readPhoto), else as a stored display photo plus a file id.
+   */
   private processPhoto(row: StoredRow): void {
     const v = row[Data.DATA15];
     if (typeof v === 'string' && v.startsWith('blob:')) {
+      const size = imageSize(v.slice(5));
+      if (size && Math.max(size.width, size.height) <= THUMBNAIL_PX) {
+        row[Data.DATA14] = null;
+        return;
+      }
       row[Data.DATA14] = this.fake.storePhoto(v.slice(5));
       row[Data.DATA15] = 'thumbnail';
     }
@@ -996,6 +1035,34 @@ class BatchApplier {
 
 const defaults = (d: StoredRow): StoredRow => ({ ...d });
 
+/** ContactsProvider's thumbnail size: a photo no bigger is kept as the thumbnail alone. */
+const THUMBNAIL_PX = 96;
+
+/** The pixel size of JPEG (its SOFn segment) or PNG (its IHDR chunk) bytes; null for anything else. */
+function imageSize(b64: string): { width: number; height: number } | null {
+  let bytes: Uint8Array;
+  try {
+    bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  } catch {
+    return null;
+  }
+  const u16 = (i: number) => (bytes[i] << 8) | bytes[i + 1];
+  const u32 = (i: number) => ((bytes[i] << 24) >>> 0) + (bytes[i + 1] << 16) + (bytes[i + 2] << 8) + bytes[i + 3];
+  if (bytes.length >= 24 && bytes[0] === 0x89 && String.fromCharCode(...bytes.slice(12, 16)) === 'IHDR') {
+    return { width: u32(16), height: u32(20) };
+  }
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  for (let i = 2; i + 9 < bytes.length; ) {
+    if (bytes[i] !== 0xff) return null;
+    const marker = bytes[i + 1];
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      return { height: u16(i + 5), width: u16(i + 7) };
+    }
+    i += 2 + u16(i + 2);
+  }
+  return null;
+}
+
 const RAW_CONTACT_DEFAULTS: StoredRow = {
   [RawContacts.SOURCE_ID]: null,
   [RawContacts.VERSION]: 1,
@@ -1045,7 +1112,7 @@ const EVENT_DEFAULTS: StoredRow = {
   [Events.GUESTS_CAN_INVITE_OTHERS]: 1,
   [Events.GUESTS_CAN_SEE_GUESTS]: 1,
   [Events.ALL_DAY]: 0,
-  [Events.STATUS]: 0,
+  // No default for STATUS (`eventStatus INTEGER`): an app that writes none leaves NULL.
 };
 
 /**

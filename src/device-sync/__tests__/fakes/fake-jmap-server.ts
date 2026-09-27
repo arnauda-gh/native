@@ -965,6 +965,8 @@ function normalizeEvent(input: Obj, now: string, mode: 'jmap' | 'server'): Obj {
       }
       privacy = Math.max(privacy, PRIVACY_RANK.indexOf(String(value.privacy)));
       for (const forbidden of FORBIDDEN_OVERRIDE_PROPERTIES) delete value[forbidden];
+      // Stored as a VEVENT of its own: an empty map writes nothing there either.
+      dropEmptyMaps(value, EVENT_MAPS);
       if (Object.keys(value).length > 0) {
         normalizeEventTimes(value);
         addNestedTypes(value);

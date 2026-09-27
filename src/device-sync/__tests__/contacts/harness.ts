@@ -4,7 +4,7 @@
  * way the engine applies them (one op group per batch); uploads go through
  * the fake server's patch handling and come back through its normalisation.
  */
-import { Data, GroupMembership, Groups, RawContacts } from '../../android-columns';
+import { GroupMembership, Groups, RawContacts } from '../../android-columns';
 import { makeKeyMinter, parseObjectRef, uuidFrom } from '../../common/ids';
 import { contactsPlanner } from '../../contacts/planner';
 import type {
@@ -16,7 +16,7 @@ import type {
   UploadAction,
   UploadPlan,
 } from '../../planner';
-import { CONTACTS_AUTHORITY, type BatchResult, type OpResult, type ProviderOp, type ProviderPort, type Row } from '../../types';
+import { CONTACTS_AUTHORITY, type BatchResult, type ProviderPort, type Row } from '../../types';
 import { FakeJmapServer } from '../fakes/fake-jmap-server';
 import { FakeDeviceProviders } from '../fakes/fake-provider';
 
@@ -34,40 +34,6 @@ function rowsOf(res: { columns: string[]; rows: unknown[][] }): Row[] {
   return res.rows.map((cells) => Object.fromEntries(res.columns.map((c, i) => [c, cells[i]])) as Row);
 }
 
-/**
- * ContactsProvider keeps a photo no larger than its 96 px thumbnail as the
- * thumbnail only: PHOTO_FILE_ID (DATA14) stays NULL, and the thumbnail
- * (DATA15) does not read back. The fake stores every photo with a display
- * photo; this makes the photo rows a batch wrote thumbnail-only, as a device
- * does with the test fixtures' 1×1 JPEGs.
- */
-export function keepThumbnailsOnly(device: FakeDeviceProviders, ops: ProviderOp[], results: OpResult[]): void {
-  ops.forEach((op, i) => {
-    if ((op.op !== 'insert' && op.op !== 'update') || op.table !== 'data') return;
-    const bytes = op.values[Data.DATA15];
-    if (!bytes || typeof bytes !== 'object') return;
-    const id = op.op === 'insert' ? results[i]?.id : op.id;
-    const row = id === undefined ? undefined : device.table('data').get(id);
-    if (row) row[Data.DATA14] = null;
-  });
-}
-
-/** A provider port whose photo writes come out thumbnail-only (see `keepThumbnailsOnly`). */
-export function thumbnailOnlyPort(device: FakeDeviceProviders, port: ProviderPort): ProviderPort {
-  return {
-    accountName: port.accountName,
-    authority: port.authority,
-    query: (q) => port.query(q),
-    readSyncState: () => port.readSyncState(),
-    readPhoto: (id, px) => port.readPhoto(id, px),
-    applyBatch: async (ops) => {
-      const res = await port.applyBatch(ops);
-      if (res.ok) keepThumbnailsOnly(device, ops, res.results);
-      return res;
-    },
-  };
-}
-
 export class Harness {
   readonly device = new FakeDeviceProviders();
   readonly port: ProviderPort = this.device.port(ACCOUNT, CONTACTS_AUTHORITY);
@@ -82,8 +48,6 @@ export class Harness {
   readonly unselected = new Set<string>();
   /** When false the context has no `groupsOf` (memberships not synced). */
   groupIndex = true;
-  /** When true the photos the planner writes come out thumbnail-only (see `keepThumbnailsOnly`). */
-  thumbnailPhotos = false;
   readonly ctx: ContactsContext;
 
   constructor() {
@@ -133,9 +97,7 @@ export class Harness {
 
   async apply(group: OpGroup): Promise<BatchResult> {
     if (!group.ops.length) return { ok: true, results: [] };
-    const res = await this.port.applyBatch(group.ops);
-    if (res.ok && this.thumbnailPhotos) keepThumbnailsOnly(this.device, group.ops, res.results);
-    return res;
+    return this.port.applyBatch(group.ops);
   }
 
   async applyOk(group: OpGroup): Promise<void> {

@@ -9,7 +9,6 @@ import { contactsPlanner } from '../../contacts/planner';
 import { addServerCards, ANDROID_ACCOUNT, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
 import type { SetTarget } from '../fakes/fake-jmap-server';
 import { JPEG } from './fixtures';
-import { thumbnailOnlyPort } from './harness';
 
 function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
   const h = createHarness(options);
@@ -119,8 +118,6 @@ describe('contacts through the engine', () => {
 
   it('keeps one row for a small photo the provider stores as its thumbnail, and never deletes it on the server', async () => {
     const h = real();
-    const base = h.deps.provider;
-    h.deps.provider = (name, authority) => thumbnailOnlyPort(h.device, base(name, authority));
     const media = { ph: { kind: 'photo', uri: `data:image/jpeg;base64,${JPEG}`, mediaType: 'image/jpeg' } };
     const card = h.server.addCard('a', { uid: 'u-small', name: { full: 'Photo Smalltest' }, notes: { n1: { note: 'v1' } }, addressBookIds: { [h.book]: true }, media });
     expect((await h.run()).outcome).toBe('ok');

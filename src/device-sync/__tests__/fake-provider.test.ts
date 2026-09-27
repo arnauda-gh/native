@@ -10,6 +10,7 @@ import {
   StructuredPostal,
 } from '../android-columns';
 import { CALENDAR_AUTHORITY, CONTACTS_AUTHORITY, type ProviderOp } from '../types';
+import { JPEG } from './contacts/fixtures';
 import { FakeDeviceProviders, aospDurationValid, aospRruleValid } from './fakes/fake-provider';
 import { compileWhere } from './fakes/fake-sql';
 
@@ -129,13 +130,13 @@ describe('FakeDeviceProviders: contacts', () => {
   });
 
   it('refuses 500 contacts ops without a yield point and oversized batches', async () => {
-    const fake = new FakeDeviceProviders({ maxBatchBytes: 50_000 });
+    const fake = new FakeDeviceProviders({ maxBatchBytes: 500_000 });
     const port = fake.port(ME, CONTACTS_AUTHORITY);
     const ops: ProviderOp[] = Array.from({ length: 500 }, () => ({ op: 'insert', table: 'raw_contacts', values: {} }) as ProviderOp);
     expect(await port.applyBatch(ops)).toMatchObject({ ok: false, reason: 'provider' });
     ops[250] = { ...ops[250], yieldAllowed: true };
     expect((await port.applyBatch(ops)).ok).toBe(true);
-    const big = await port.applyBatch([{ op: 'insert', table: 'raw_contacts', values: { [RawContacts.SYNC2]: 'x'.repeat(60_000) } }]);
+    const big = await port.applyBatch([{ op: 'insert', table: 'raw_contacts', values: { [RawContacts.SYNC2]: 'x'.repeat(300_000) } }]);
     expect(big).toMatchObject({ ok: false, reason: 'tooLarge' });
   });
 
@@ -164,6 +165,31 @@ describe('FakeDeviceProviders: contacts', () => {
     const rows = await port.query({ table: 'data', columns: [Data.DATA14, Data.DATA15], where: `${Data.MIMETYPE} = ?`, args: [MimeType.PHOTO] });
     // data14 is a TEXT column: the file id reads back as text.
     expect(rows.rows[0]).toEqual([String(photo!.fileId), null]);
+  });
+
+  it('keeps a photo within the 96 px thumbnail as the thumbnail alone, and serves that to readPhoto', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    const res = await port.applyBatch([
+      { op: 'insert', table: 'data', values: { [Data.RAW_CONTACT_ID]: rawId, [Data.MIMETYPE]: MimeType.PHOTO, [Data.DATA15]: { b64: JPEG } } },
+    ]);
+    expect(res.ok).toBe(true);
+    const rows = await port.query({ table: 'data', columns: [Data.DATA14, Data.DATA15], where: `${Data.MIMETYPE} = ?`, args: [MimeType.PHOTO] });
+    // No PHOTO_FILE_ID for a 1×1 JPEG, and the thumbnail does not read back.
+    expect(rows.rows[0]).toEqual([null, null]);
+    expect(await port.readPhoto(rawId, 512)).toEqual({ jpegBase64: JPEG, fileId: null });
+  });
+
+  it('weighs a batch as its Binder transaction does: two bytes per character of its JSON, a photo by its bytes', async () => {
+    const fake = new FakeDeviceProviders();
+    const { port, rawId } = await contactWithEmail(fake);
+    // 600,000 characters of text are about 1.2 MB in the Parcel; the same number of base64 characters are 450 KB of photo.
+    const text = await port.applyBatch([{ op: 'update', table: 'raw_contacts', id: rawId, values: { [RawContacts.SYNC2]: 'x'.repeat(600_000) } }]);
+    expect(text).toMatchObject({ ok: false, reason: 'tooLarge' });
+    const photo = await port.applyBatch([
+      { op: 'insert', table: 'data', values: { [Data.RAW_CONTACT_ID]: rawId, [Data.MIMETYPE]: MimeType.PHOTO, [Data.DATA15]: { b64: 'A'.repeat(600_000) } } },
+    ]);
+    expect(photo.ok).toBe(true);
   });
 
   it('models Fossify saves: rows re-inserted without DATA_SYNC', async () => {
@@ -244,6 +270,15 @@ describe('FakeDeviceProviders: calendar', () => {
     expect(fake.row('events', exceptionId)![Events.ORIGINAL_SYNC_ID]).toBe('c/e9');
     await port.applyBatch([{ op: 'delete', table: 'events', id: masterId }]);
     expect(fake.row('events', exceptionId)).toBeDefined();
+  });
+
+  it('leaves STATUS NULL on an event an app inserts without one (the column has no default)', async () => {
+    const fake = new FakeDeviceProviders();
+    const { calendarId } = await calendar(fake);
+    const id = fake.user.insertEvent(calendarId, { [Events.DTSTART]: 0, [Events.DTEND]: 1000, [Events.EVENT_TIMEZONE]: 'UTC', [Events.TITLE]: 'x' });
+    expect(fake.row('events', id)![Events.STATUS]).toBeNull();
+    // Unlike AVAILABILITY and ACCESS_LEVEL (NOT NULL DEFAULT 0).
+    expect(fake.row('events', id)).toMatchObject({ [Events.AVAILABILITY]: 0, [Events.ACCESS_LEVEL]: 0 });
   });
 
   it('hard-deletes app-deleted events without _SYNC_ID and soft-deletes synced ones', async () => {

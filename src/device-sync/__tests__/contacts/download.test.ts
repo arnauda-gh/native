@@ -52,7 +52,9 @@ describe('contacts download: golden rows', () => {
     expect(cells(rows['relatedTo:urn:uuid:other-person'], TYPED)).toEqual({ data1: 'Other Person', data2: '6', data3: null });
     expect(cells(rows['notes:n1'], ['data1'])).toEqual({ data1: 'first note' });
     expect(rows['media:ph'].data_sync2).toBe(photoHash(JPEG));
-    expect(h.device.photo(Number(rows['media:ph'].data14))).toBe(JPEG);
+    // A 1×1 photo is kept as the thumbnail alone (no PHOTO_FILE_ID), and read from it.
+    expect(rows['media:ph'].data14).toBeNull();
+    expect((await h.port.readPhoto(rawId, 512))?.jpegBase64).toBe(JPEG);
 
     const raw = h.rawContact(rawId);
     expect(raw).toMatchObject({
