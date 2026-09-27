@@ -1,9 +1,10 @@
 // Engine runs for calendars, and the teardown the app calls when sync is
 // turned off (docs/device-sync.md, "Calendar mapping", "App integration").
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Events } from '../../android-columns';
 import { parseJsonColumn } from '../../common/json';
+import { teardownAuthority } from '../../engine/teardown';
 import type { PoisonMarker } from '../../planner';
 import {
   addDeviceContact,
@@ -12,6 +13,7 @@ import {
   CALENDAR_AUTHORITY,
   CONTACTS_AUTHORITY,
   createHarness,
+  REGISTRY_ID,
   renameDeviceContact,
   type Harness,
 } from './harness';
@@ -238,6 +240,24 @@ describe('device sync engine: teardown', () => {
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 60 });
     expect(h.serverNames()).toHaveLength(80);
   });
+
+  it("finishes while JS timers are paused (the UI's teardown with the app in the background)", async () => {
+    const h = createHarness();
+    const [ada] = addServerCards(h, ['Ada']);
+    await h.run();
+    renameDeviceContact(h, h.contactNamed('Ada')!.id, 'Ada King');
+    // The app passes neither a yield nor a sleep: the engine's own must not need a timer here.
+    const { yieldThread: _yield, sleep: _sleep, ...deps } = h.deps;
+    vi.useFakeTimers();
+    try {
+      await expect(teardownAuthority(deps, REGISTRY_ID, ANDROID_ACCOUNT, CONTACTS_AUTHORITY)).resolves.toEqual({ pending: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ name: { full: 'Ada King' } });
+    expect(h.contacts()).toEqual([]);
+  }, 3_000);
 
   it('removes the calendar rows, and their events with them', async () => {
     const h = createHarness();

@@ -80,7 +80,9 @@ export async function teardownAuthority(
           if (!stored.owner || stored.owner.origin === connection.origin) {
             const report = new ReportBuilder('teardown', authority, started, tuning.maxItemErrors);
             const { sync } = await createEnv({
-              deps,
+              // Started from the UI: JS timers stop while the app is in the background and no headless task
+              // runs, so the teardown's own waits (checkpoint yields, retry back-offs) must not need one.
+              deps: { ...deps, yieldThread: deps.yieldThread ?? (async () => undefined), sleep: deps.sleep ?? (async () => undefined) },
               tuning: { ...tuning, deadlineMarginMs: 0, createBudgetMs: 0 },
               mode: 'teardown',
               registryId,
