@@ -454,10 +454,10 @@ function exceptionChanges(
         break;
       case 'description':
         if (x.baseline && isTruncatedBaseline(x.baseline.cells[Events.DESCRIPTION])) continue;
-        values.description = descriptionValue(cells);
+        values.description = descriptionValue(cells) ?? clearedInOverride('description', instance, shadow);
         break;
       case 'location':
-        values.locations = locationChanges(instance, cells[Events.EVENT_LOCATION], ctx.mintKey).locations;
+        values.locations = locationChanges(instance, cells[Events.EVENT_LOCATION], ctx.mintKey).locations ?? clearedInOverride('location', instance, shadow);
         break;
       case 'status':
         values.status = statusFromDevice(cells[Events.STATUS]);
@@ -528,6 +528,22 @@ function isEmptyUnit(unit: string, cells: Row): boolean {
   const column = { title: Events.TITLE, description: Events.DESCRIPTION, location: Events.EVENT_LOCATION, color: Events.EVENT_COLOR }[unit];
   const v = column ? cells[column] : null;
   return v === null || v === undefined || v === '';
+}
+
+/**
+ * A description or location cleared on an existing override. An override
+ * without one of its own shows the series' again, so while the series has
+ * one the override gets the empty value Stalwart keeps: the empty text, or a
+ * location without a name (an empty map writes no LOCATION line and reads
+ * back as none of its own). Null, a clean removal, when nothing would come
+ * back.
+ */
+function clearedInOverride(unit: 'description' | 'location', instance: CalendarEventWire, master: CalendarEventWire): unknown {
+  if (unit === 'description') return typeof master.description === 'string' && master.description ? '' : null;
+  const series = Object.keys(master.locations ?? {});
+  if (!series.length) return null;
+  const key = Object.keys(instance.locations ?? {})[0] ?? series[0];
+  return { [key]: { '@type': 'Location', name: '' } };
 }
 
 /**

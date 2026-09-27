@@ -103,6 +103,49 @@ describe('calendar planner: recurrence edits made on the device', () => {
     expect(h.row(x.eventId)).toBeUndefined();
   });
 
+  it('clears an occurrence\'s own description and location instead of letting the series\' come back', async () => {
+    const event = weekly();
+    event.description = 'Daily agenda';
+    event.recurrenceOverrides!['2026-10-07T09:00:00'] = {
+      ...event.recurrenceOverrides!['2026-10-07T09:00:00'],
+      description: 'Special agenda',
+      locations: { locB: { '@type': 'Location', name: 'Room 2' } },
+    };
+    const { h } = await synced(event);
+    const x = (await h.local('bl'))!.exceptions[0];
+    expect(h.row(x.eventId)).toMatchObject({ [Events.DESCRIPTION]: 'Special agenda', [Events.EVENT_LOCATION]: 'Room 2' });
+    h.fake.user.updateEvent(x.eventId, { [Events.DESCRIPTION]: null, [Events.EVENT_LOCATION]: null });
+    const local = (await h.local('bl'))!;
+    const plan = calendarPlanner.planUpload(local, h.ctx);
+    const server = await accept(h, event, local, plan);
+    expect(h.row(x.eventId)).toMatchObject({ [Events.DESCRIPTION]: null, [Events.EVENT_LOCATION]: null, [Events.DIRTY]: 0 });
+    expect(calendarPlanner.planDownload(server, (await h.local('bl'))!, h.ctx).effect).toBe('none');
+    // Without a value of its own the override would show the series' "Daily agenda" and "Room 1" again, so it
+    // gets the empty ones Stalwart keeps (an empty map would read back as no locations, i.e. the series' ones).
+    expect(patchOf(plan).patch).toEqual({
+      'recurrenceOverrides/2026-10-07T09:00:00/description': '',
+      'recurrenceOverrides/2026-10-07T09:00:00/locations': { locB: { '@type': 'Location', name: '' } },
+    });
+  });
+
+  it('removes an occurrence\'s own description and location when the series has none to show instead', async () => {
+    const event = weekly();
+    delete event.description;
+    delete event.locations;
+    event.recurrenceOverrides!['2026-10-07T09:00:00'] = {
+      ...event.recurrenceOverrides!['2026-10-07T09:00:00'],
+      description: 'Special agenda',
+      locations: { locB: { '@type': 'Location', name: 'Room 2' } },
+    };
+    const { h } = await synced(event);
+    const x = (await h.local('bl'))!.exceptions[0];
+    h.fake.user.updateEvent(x.eventId, { [Events.DESCRIPTION]: null, [Events.EVENT_LOCATION]: null });
+    expect(patchOf(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx)).patch).toEqual({
+      'recurrenceOverrides/2026-10-07T09:00:00/description': null,
+      'recurrenceOverrides/2026-10-07T09:00:00/locations': null,
+    });
+  });
+
   it('patches an existing override one level deep, never deeper', async () => {
     const { h } = await synced(weekly());
     const x = (await h.local('bl'))!.exceptions[0];
