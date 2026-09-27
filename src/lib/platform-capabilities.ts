@@ -14,3 +14,15 @@ import { Platform } from 'react-native';
  * check) is hidden when this is false.
  */
 export const supportsSideloadUpdates = Platform.OS === 'android';
+
+/**
+ * Device sync: address books and calendars in Android's Contacts and Calendar
+ * providers, under an account of the app's own type (#34,
+ * docs/device-sync.md).
+ *
+ * Android only: iOS has no third-party sync-provider API for either. The UI
+ * also needs the native module (`isDeviceSyncAvailable()` in
+ * `device-sync/native`), so a build without it hides the feature instead of
+ * failing.
+ */
+export const supportsDeviceSync = Platform.OS === 'android';

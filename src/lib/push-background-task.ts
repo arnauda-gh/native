@@ -378,12 +378,29 @@ async function detachedNewestUnreadInboxIds(
   return (qBody.ids as string[]) ?? [];
 }
 
+/**
+ * A StateChange push in which no account got new mail: only contact or
+ * calendar changes, which the native push router already turned into device
+ * syncs (#34, docs/device-sync.md "Triggers"). Without `EmailDelivery` there
+ * is nothing to notify, and the legacy path (the newest unread mail) must
+ * not run for it. An empty or missing `changed` map keeps the old behaviour.
+ */
+export function carriesNoMail(payload: RelayPushData): boolean {
+  if (payload.kind !== 'jmap-state-change' || !payload.changed) return false;
+  const accounts = Object.values(payload.changed);
+  if (accounts.length === 0) return false;
+  return !accounts.some((types) => !!types && typeof types === 'object' && 'EmailDelivery' in types);
+}
+
 // Fired by BulwarkPushTaskService when a data FCM message arrives. Runs in a
 // short-lived headless JS runtime - keep it fast, catch all errors, and always
 // resolve so the native service can release its wake lock. Never touches the
 // singleton jmapClient's session (see "Detached JMAP access" above).
 export async function pushBackgroundTask(data: unknown): Promise<void> {
   try {
+    const payload = parseRelayPushData(data);
+    if (carriesNoMail(payload)) return;
+
     if (!(await emailNotificationsAllowed())) return;
 
     await migrateLegacyPushKeys();
@@ -392,7 +409,6 @@ export async function pushBackgroundTask(data: unknown): Promise<void> {
     if (accountIds.length === 0) return;
 
     const registry = await readAccountRegistry();
-    const payload = parseRelayPushData(data);
     const jmapAccountIds = await readPushJmapAccountIds();
     const accountsToCheck = matchAccountsForPush(payload, accountIds, jmapAccountIds, registry);
 

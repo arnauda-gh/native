@@ -42,12 +42,32 @@ const { CREATED } = vi.hoisted(() => ({
   CREATED: { id: 'new-server-id', expires: null as string | null },
 }));
 
+// A client of another signed-in account (device sync patches its push types
+// without the singleton).
+const { DETACHED } = vi.hoisted(() => ({
+  DETACHED: { loaded: true, types: ['EmailDelivery'] as string[], log: [] as unknown[] },
+}));
+
 vi.mock('../../api/jmap-client', () => ({
   jmapClient: {
     username: 'user@example.com',
     serverUrl: 'https://mail.example.com',
     accountId: 'jmap-primary',
     currentSession: { capabilities: { 'urn:ietf:params:jmap:core': {} } },
+  },
+  JMAPClient: class {
+    async loadAccount(id: string) {
+      DETACHED.log.push(['load', id]);
+      return DETACHED.loaded;
+    }
+    async request(calls: Array<[string, Record<string, any>, string]>) {
+      const [name, args, id] = calls[0];
+      DETACHED.log.push([name, args]);
+      if (name === 'PushSubscription/get') {
+        return { methodResponses: [[name, { list: [{ id: args.ids[0], types: DETACHED.types }] }, id]] };
+      }
+      return { methodResponses: [[name, { updated: { [Object.keys(args.update)[0]]: null } }, id]] };
+    }
   },
 }));
 
@@ -77,6 +97,8 @@ import {
   readPushAccountIds,
   readPushJmapAccountIds,
   PushSetupError,
+  pushTypesFor,
+  refreshPushSubscriptionTypes,
   resyncPushNotifications,
   revokePushDevice,
   teardownPushNotificationsForAccount,
@@ -351,6 +373,117 @@ describe('setupPushNotifications subscription shape', () => {
     const err = await setupPushNotifications({ relayBaseUrl: RELAY }).catch((e) => e);
     expect(err.phase).toBe('token');
     expect(err.message).toContain('SERVICE_NOT_AVAILABLE');
+  });
+});
+
+describe('push types for device sync (#34)', () => {
+  const DEVICE_SYNC_KEY = 'device-sync:v1';
+  const CONTACTS = 'com.android.contacts';
+  const CALENDAR = 'com.android.calendar';
+  const healthy = (types: string[]) => ({
+    id: 'existing',
+    deviceClientId: OUR_DCID,
+    expires: new Date(Date.now() + 80 * 86400000).toISOString(),
+    types,
+  });
+
+  async function syncing(enabled: Record<string, boolean>, extra: Record<string, unknown> = {}): Promise<void> {
+    await AsyncStorage.setItem(DEVICE_SYNC_KEY, JSON.stringify({
+      state: { accounts: { [ACCOUNT_ID]: { enabled, ...extra } } },
+      version: 0,
+    }));
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem(deviceClientIdKey(ACCOUNT_ID), OUR_DCID);
+    (jmapClient as { currentSession: unknown }).currentSession = {
+      capabilities: { 'urn:ietf:params:jmap:core': {} },
+    };
+    listMock.mockResolvedValue([]);
+    updateMock.mockResolvedValue(true);
+    installFetch({});
+  });
+
+  it('adds the contact and calendar types of what the account syncs to the device', async () => {
+    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery']);
+    await syncing({ [CONTACTS]: true, [CALENDAR]: false });
+    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery', 'ContactCard', 'AddressBook']);
+    expect(await pushTypesFor('someone@else.example')).toEqual(['EmailDelivery']);
+    // Removed in Android Settings: nothing to route any more.
+    await syncing({ [CONTACTS]: true }, { removedInAndroidSettings: true });
+    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery']);
+  });
+
+  it('subscribes with them', async () => {
+    await syncing({ [CALENDAR]: true });
+    await setupPushNotifications({ relayBaseUrl: RELAY });
+    expect(createMock.mock.calls[0][0].types).toEqual(['EmailDelivery', 'CalendarEvent', 'Calendar']);
+  });
+
+  it('patches a subscription made before sync was turned on', async () => {
+    await AsyncStorage.setItem(SUB_KEY, 'existing');
+    listMock.mockResolvedValue([healthy(['EmailDelivery'])]);
+    await syncing({ [CONTACTS]: true, [CALENDAR]: true });
+    await setupPushNotifications({ relayBaseUrl: RELAY });
+    expect(createMock).not.toHaveBeenCalled();
+    expect(updateMock.mock.calls[0][1].types)
+      .toEqual(['EmailDelivery', 'ContactCard', 'AddressBook', 'CalendarEvent', 'Calendar']);
+  });
+
+  it('re-applies the types after a toggle', async () => {
+    await AsyncStorage.setItem(SUB_KEY, 'existing');
+    listMock.mockResolvedValue([healthy(['EmailDelivery'])]);
+    await syncing({ [CONTACTS]: true });
+    await refreshPushSubscriptionTypes(ACCOUNT_ID);
+    expect(updateMock).toHaveBeenCalledWith('existing', { types: ['EmailDelivery', 'ContactCard', 'AddressBook'] });
+
+    // An account without a push subscription has nothing to patch.
+    updateMock.mockClear();
+    DETACHED.log = [];
+    await refreshPushSubscriptionTypes('someone@else.example');
+    expect(updateMock).not.toHaveBeenCalled();
+    expect(DETACHED.log).toEqual([]);
+
+    // Already what it should be, in another order: nothing to send.
+    listMock.mockResolvedValue([healthy(['AddressBook', 'EmailDelivery', 'ContactCard'])]);
+    await refreshPushSubscriptionTypes(ACCOUNT_ID);
+    expect(updateMock).not.toHaveBeenCalled();
+  });
+
+  it("patches another account's subscription through a client of its own", async () => {
+    const OTHER = 'bob@other.example.net';
+    await AsyncStorage.setItem(`push:subscriptionId:v2:${OTHER}`, 'bob-sub');
+    await AsyncStorage.setItem(DEVICE_SYNC_KEY, JSON.stringify({
+      state: { accounts: { [OTHER]: { enabled: { [CALENDAR]: true } } } },
+      version: 0,
+    }));
+    DETACHED.log = [];
+    DETACHED.types = ['EmailDelivery'];
+    await refreshPushSubscriptionTypes(OTHER);
+    expect(DETACHED.log).toEqual([
+      ['load', OTHER],
+      ['PushSubscription/get', { ids: ['bob-sub'], properties: ['id', 'types'] }],
+      ['PushSubscription/set', { update: { 'bob-sub': { types: ['EmailDelivery', 'CalendarEvent', 'Calendar'] } } }],
+    ]);
+    // The singleton's subscriptions were not touched.
+    expect(updateMock).not.toHaveBeenCalled();
+
+    // Already right: read, nothing written.
+    DETACHED.log = [];
+    DETACHED.types = ['Calendar', 'CalendarEvent', 'EmailDelivery'];
+    await refreshPushSubscriptionTypes(OTHER);
+    expect(DETACHED.log.map((entry) => (entry as unknown[])[0])).toEqual(['load', 'PushSubscription/get']);
+  });
+
+  it('leaves the subscription of an account that turned push off alone', async () => {
+    await AsyncStorage.setItem(SUB_KEY, 'existing');
+    await AsyncStorage.setItem(`push:optedOut:v1:${ACCOUNT_ID}`, '1');
+    listMock.mockResolvedValue([healthy(['EmailDelivery'])]);
+    await syncing({ [CONTACTS]: true });
+    await refreshPushSubscriptionTypes(ACCOUNT_ID);
+    expect(updateMock).not.toHaveBeenCalled();
   });
 });
 

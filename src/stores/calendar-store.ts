@@ -47,6 +47,8 @@ import {
 } from '../lib/recurrence-instances';
 import { findTasksOnlyCalendarIds, isTaskLikeObject } from '../lib/calendar-component-detection';
 import { mergeRangeEvents, mergedSpanLimit, planRangeLoad, sameRange } from '../lib/calendar-range-cache';
+import { requestDeviceSync } from '../device-sync/app/request';
+import { CALENDAR_AUTHORITY } from '../device-sync/types';
 
 // extendRange merges up to twice the requested range (at least half a year,
 // at most about three years); past that it starts over with the request.
@@ -777,6 +779,7 @@ export const useCalendarStore = create<CalendarState>()(
         ? expandRecurringEvents([mapped], loadedRange.after, loadedRange.before)
         : [mapped];
     set({ events: [...get().events, ...inserted] });
+    requestDeviceSync(CALENDAR_AUTHORITY);
     return full;
   },
 
@@ -818,6 +821,7 @@ export const useCalendarStore = create<CalendarState>()(
     set({
       events: get().events.map((e) => (e.id === id ? { ...e, ...(changes as Partial<CalendarEvent>) } : e)),
     });
+    requestDeviceSync(CALENDAR_AUTHORITY);
     // A series mutation (an occurrence override, a truncated/changed rule, a
     // master edit) touches every expanded sibling, and the optimistic merge
     // above only updated the tapped one; server-expanded occurrences also
@@ -853,6 +857,7 @@ export const useCalendarStore = create<CalendarState>()(
           && !(seriesIdOf(e) === realId && (e.accountId ?? undefined) === (accountId ?? undefined))),
       });
     }
+    requestDeviceSync(CALENDAR_AUTHORITY);
     if (touchesSeries) {
       await get().refresh();
     }
@@ -915,6 +920,7 @@ export const useCalendarStore = create<CalendarState>()(
           : undefined;
       await apiRsvpEvent(realId, participantId, status, repair, accountId);
     }
+    requestDeviceSync(CALENDAR_AUTHORITY);
     set({
       events: get().events.map((e) => {
         if (e.id !== eventId || !e.participants?.[participantId]) return e;
@@ -996,7 +1002,10 @@ export const useCalendarStore = create<CalendarState>()(
       }
     } finally {
       // Also when a chunk was refused: show what did get in.
-      if (count > 0 || linked > 0) await get().refresh();
+      if (count > 0 || linked > 0) {
+        requestDeviceSync(CALENDAR_AUTHORITY);
+        await get().refresh();
+      }
     }
     if (count + linked === 0 && refused.length > 0) throw new ImportRefusedError(refused);
     return { imported: count + linked, refused };
@@ -1005,6 +1014,7 @@ export const useCalendarStore = create<CalendarState>()(
   createCalendar: async (name, color, description) => {
     const created = await apiCreateCalendar(name, color, description);
     set({ calendars: [...get().calendars, created] });
+    requestDeviceSync(CALENDAR_AUTHORITY);
     return created;
   },
 
@@ -1014,6 +1024,7 @@ export const useCalendarStore = create<CalendarState>()(
     set({
       calendars: get().calendars.map((c) => (c.id === id ? { ...c, ...updates } as Calendar : c)),
     });
+    requestDeviceSync(CALENDAR_AUTHORITY);
   },
 
   removeCalendar: async (id) => {
@@ -1025,12 +1036,15 @@ export const useCalendarStore = create<CalendarState>()(
       tasks: get().tasks.filter((t) => !t.calendarIds?.[id]),
       hiddenCalendarIds: get().hiddenCalendarIds.filter((x) => x !== id),
     });
+    requestDeviceSync(CALENDAR_AUTHORITY);
   },
 
   clearCalendarEvents: async (id) => {
     const cal = get().calendars.find((c) => c.id === id);
     try {
-      return await apiClearCalendarEvents(cal?.originalId || id, cal?.accountId);
+      const cleared = await apiClearCalendarEvents(cal?.originalId || id, cal?.accountId);
+      requestDeviceSync(CALENDAR_AUTHORITY);
+      return cleared;
     } finally {
       // Also after a refused batch: earlier batches may have gone through.
       await get().refresh();

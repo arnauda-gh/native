@@ -15,6 +15,7 @@ import { NativeModules } from 'react-native';
 import { jmapClient } from '../../api/jmap-client';
 import { secureFetch } from '../client-cert';
 import {
+  carriesNoMail,
   matchAccountsForPush,
   parseRelayPushData,
   pushBackgroundTask,
@@ -183,6 +184,58 @@ describe('pushBackgroundTask notifications', () => {
     });
 
     expect(showNotification).toHaveBeenCalledWith(expect.objectContaining({ emailId: 'm1', body: '(Kein Betreff)' }));
+  });
+});
+
+describe('pushes for device sync (#34)', () => {
+  const LOCAL = 'alice@mail.example.com';
+  const showNotification = vi.fn(async () => undefined);
+  const stateChange = (changed: Record<string, Record<string, string>>) => ({
+    kind: 'jmap-state-change',
+    accountLabel: 'alice',
+    accountId: Object.keys(changed)[0],
+    emailIds: '[]',
+    changed: JSON.stringify(changed),
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await AsyncStorage.clear();
+    await AsyncStorage.setItem('push:accountIds:v1', JSON.stringify([LOCAL]));
+    await AsyncStorage.setItem('push:jmapAccountIds:v1', JSON.stringify({ [LOCAL]: 'jmap-primary' }));
+    (NativeModules as Record<string, unknown>).BulwarkFcm = { showNotification };
+    (jmapClient.getStoredCredentials as ReturnType<typeof vi.fn>).mockResolvedValue({
+      serverUrl: 'https://mail.example.com',
+      username: 'alice',
+      password: 'secret',
+    });
+    (secureFetch as ReturnType<typeof vi.fn>).mockResolvedValue({ ok: false, status: 500 });
+  });
+
+  afterEach(() => {
+    delete (NativeModules as Record<string, unknown>).BulwarkFcm;
+  });
+
+  it('tells contact and calendar changes from new mail', () => {
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { ContactCard: 's1', AddressBook: 's2' } })))).toBe(true);
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { CalendarEvent: 'e1' }, b: { Calendar: 'c1' } })))).toBe(true);
+    // Mail in any account of the map, an EmailPush, or a map it can't read: as before.
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { ContactCard: 's1' }, b: { EmailDelivery: 'm1' } })))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData({ kind: 'jmap-email-push', accountId: 'a', emailIds: '["m1"]' }))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData({ kind: 'jmap-state-change', emailIds: '[]', changed: '{}' }))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData({ kind: 'jmap-state-change', emailIds: '[]' }))).toBe(false);
+  });
+
+  it('neither looks for mail nor notifies for a change without new mail', async () => {
+    await pushBackgroundTask(stateChange({ 'jmap-primary': { ContactCard: 's1' }, team: { CalendarEvent: 'e1' } }));
+    expect(jmapClient.getStoredCredentials).not.toHaveBeenCalled();
+    expect(secureFetch).not.toHaveBeenCalled();
+    expect(showNotification).not.toHaveBeenCalled();
+  });
+
+  it('still checks for mail when the map carries new mail', async () => {
+    await pushBackgroundTask(stateChange({ 'jmap-primary': { EmailDelivery: 'm1', ContactCard: 's1' } }));
+    expect(jmapClient.getStoredCredentials).toHaveBeenCalledWith(LOCAL);
   });
 });
 
