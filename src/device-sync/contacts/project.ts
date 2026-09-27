@@ -318,11 +318,16 @@ export function rowMatchesUnit(u: Pick<Unit, 'mimetype' | 'cells'>, stored: Row,
   return spec.columns.every((c) => same(u.cells[c], stored[c], c));
 }
 
-/** Whether a row has nothing in it (an editor's blank nickname or note). */
+/**
+ * Whether a row has nothing in it (an editor's blank nickname or note). A
+ * photo row always holds a photo: ContactsProvider keeps one within its 96 px
+ * thumbnail as the thumbnail alone, without PHOTO_FILE_ID, and the thumbnail
+ * (DATA15, a blob) does not read back.
+ */
 export function isEmptyRow(mimetype: string, cells: Row): boolean {
   const spec = SPECS[mimetype];
   if (!spec) return true;
-  if (mimetype === MimeType.PHOTO) return cellText(cells[Data.DATA14]) === null;
+  if (mimetype === MimeType.PHOTO) return false;
   if (mimetype === MimeType.GROUP_MEMBERSHIP) return cellText(cells[GroupMembership.GROUP_SOURCE_ID]) === null && cellText(cells[Data.DATA1]) === null;
   return spec.valueColumns.every((c) => text(cells[c]) === null);
 }

@@ -3,11 +3,13 @@
 // themselves are tested in the other files of this folder.
 
 import { describe, expect, it } from 'vitest';
-import { Groups, MimeType } from '../../android-columns';
+import { Data, Groups, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
 import { addServerCards, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
 import type { SetTarget } from '../fakes/fake-jmap-server';
+import { JPEG } from './fixtures';
+import { thumbnailOnlyPort } from './harness';
 
 function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
   const h = createHarness(options);
@@ -76,6 +78,28 @@ describe('contacts through the engine', () => {
     expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();
     // Turning sync off finds nothing waiting.
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
+  it('keeps one row for a small photo the provider stores as its thumbnail, and never deletes it on the server', async () => {
+    const h = real();
+    const base = h.deps.provider;
+    h.deps.provider = (name, authority) => thumbnailOnlyPort(h.device, base(name, authority));
+    const media = { ph: { kind: 'photo', uri: `data:image/jpeg;base64,${JPEG}`, mediaType: 'image/jpeg' } };
+    const card = h.server.addCard('a', { uid: 'u-small', name: { full: 'Photo Smalltest' }, notes: { n1: { note: 'v1' } }, addressBookIds: { [h.book]: true }, media });
+    expect((await h.run()).outcome).toBe('ok');
+    const id = h.contactNamed('Photo Smalltest')!.id;
+    const rowsOf = (mimetype: string) => h.device.rows('data').filter((d) => Number(d.raw_contact_id) === id && d.mimetype === mimetype);
+    expect(rowsOf(MimeType.PHOTO)).toMatchObject([{ data14: null }]);
+
+    for (const note of ['v2', 'v3']) {
+      h.server.serverUpdate('ContactCard', 'a', card, { 'notes/n1/note': note });
+      expect((await h.run()).outcome).toBe('ok');
+      expect(rowsOf(MimeType.PHOTO)).toHaveLength(1);
+    }
+    h.device.user.updateData(Number(rowsOf(MimeType.NOTE)[0]._id), { [Data.DATA1]: 'v4 edited on device' });
+    expect(await h.run()).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+    expect(h.server.get('ContactCard', 'a', card)).toMatchObject({ notes: { n1: { note: 'v4 edited on device' } }, media });
+    expect(rowsOf(MimeType.PHOTO)).toHaveLength(1);
   });
 
   it('syncs a contact whose photo is too large for a provider batch, without the photo', async () => {

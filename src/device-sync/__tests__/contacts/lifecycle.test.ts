@@ -181,6 +181,67 @@ describe('contacts lifecycle', () => {
     });
   });
 
+  describe('a small photo the provider keeps as its thumbnail only (no PHOTO_FILE_ID)', () => {
+    const photo = { ph: { kind: 'photo', uri: `data:image/jpeg;base64,${JPEG}`, mediaType: 'image/jpeg' } };
+    const small = () => ({ name: { full: 'Photo Smalltest' }, emails: { e1: { address: 'small@example.org' } }, notes: { n1: { note: 'v1' } }, media: photo });
+    const photos = (h: Harness, rawId: number) => h.device.rows('data', 'raw_contact_id = ? AND mimetype = ?', [rawId, MimeType.PHOTO]);
+
+    it('keeps one row through downloads and merges, and never reads it as deleted', async () => {
+      const h = new Harness();
+      h.thumbnailPhotos = true;
+      const { id, rawId } = await h.seed(small());
+      expect(photos(h, rawId)).toMatchObject([{ data14: null, data_sync1: 'media:ph' }]);
+      await expectSettled(h, id, rawId);
+      for (const note of ['v2', 'v3']) {
+        h.server.serverUpdate('ContactCard', JMAP, id, { 'notes/n1/note': note });
+        await h.download(id);
+        expect(photos(h, rawId)).toHaveLength(1);
+      }
+      // A merge into an edited contact.
+      h.device.user.updateData(h.rowsByKey(rawId)['emails:e1']._id as number, { data1: 'small2@example.org' });
+      h.server.serverUpdate('ContactCard', JMAP, id, { 'notes/n1/note': 'v4' });
+      await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+      expect(photos(h, rawId)).toHaveLength(1);
+      // An edit of another field uploads alone.
+      expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+        kind: 'upload', actions: [{ kind: 'update', id, patch: { 'emails/e1/address': 'small2@example.org' } }],
+      });
+      await h.upload(rawId);
+      expect(h.card(id).media).toEqual(photo);
+      expect(photos(h, rawId)).toHaveLength(1);
+      await expectSettled(h, id, rawId);
+      // A photo set on the device (it gets a display photo) replaces it.
+      h.device.user.setPhoto(rawId, JPEG2);
+      h.devicePhotos.set(rawId, JPEG2);
+      expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+        kind: 'upload', actions: [{ kind: 'update', id, patch: { 'media/ph/uri': `data:image/jpeg;base64,${JPEG2}`, 'media/ph/mediaType': 'image/jpeg' } }],
+      });
+    });
+
+    it('heals the photo rows the same photo was inserted as again, keeping one and the server photo', async () => {
+      const h = new Harness();
+      h.thumbnailPhotos = true;
+      const { id, rawId } = await h.seed(small());
+      const [row] = photos(h, rawId);
+      const again = { [Data.MIMETYPE]: MimeType.PHOTO, [Data.DATA15]: { b64: JPEG }, data_sync1: row.data_sync1, data_sync2: row.data_sync2, data_sync3: row.data_sync3 };
+      for (let i = 0; i < 2; i++) await h.applyOk({ ref: 'again', ops: [{ op: 'insert', table: 'data', values: { ...again, [Data.RAW_CONTACT_ID]: rawId } }] });
+      expect(photos(h, rawId)).toHaveLength(3);
+      // An edit on the device uploads without touching the photo, and its accepted write keeps one row.
+      h.device.user.updateData(h.rowsByKey(rawId)['notes:n1']._id as number, { data1: 'v2 edited on device' });
+      expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+        kind: 'upload', actions: [{ kind: 'update', id, patch: { 'notes/n1/note': 'v2 edited on device' } }],
+      });
+      await h.upload(rawId);
+      expect(photos(h, rawId)).toHaveLength(1);
+      expect(h.card(id).media).toEqual(photo);
+      await expectSettled(h, id, rawId);
+      // An unchanged card downloaded again (a full reconcile) heals too.
+      for (let i = 0; i < 2; i++) await h.applyOk({ ref: 'again', ops: [{ op: 'insert', table: 'data', values: { ...again, [Data.RAW_CONTACT_ID]: rawId } }] });
+      await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+      expect(photos(h, rawId)).toHaveLength(1);
+    });
+  });
+
   it('heals a baseline the provider stored differently from the prediction', async () => {
     const h = new Harness();
     const { id, rawId } = await h.seed({ name: { full: 'Dr. Jane Q. Public' } });
