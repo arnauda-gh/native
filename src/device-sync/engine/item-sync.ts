@@ -142,7 +142,9 @@ export abstract class ItemSync {
     const meta = held.kind.meta(held.local);
     return accountOfRef(meta.sourceId) ?? accountOfRef(meta.pending?.target ?? null);
   }
-  /** Before the creates (calendar: split series and pairs). */
+  /** Before new rows are claimed (calendar: deleted and new rows that are one edit, uploaded as patches). */
+  protected async pairPhase(_acct: string): Promise<void> {}
+  /** Before the creates (calendar: split series). */
   protected async prePhase(_acct: string): Promise<void> {}
   /** After the deletions (contacts: groups deleted by absence, memberships). */
   protected async extraPhase(_acct: string, _deletionsAllowed: boolean): Promise<void> {}
@@ -691,16 +693,20 @@ export abstract class ItemSync {
   // ── Uploads ──
 
   /**
-   * Local changes to the server, per phase across the accounts: pairs and
-   * splits, creates, updates, deletions, then memberships. Creates of every
-   * account come before deletions of any, so a move between accounts never
-   * destroys first. A `stateMismatch` downloads the account again and
-   * repeats the phase, at most three times.
+   * Local changes to the server, per phase across the accounts: pairs, the
+   * claims of new rows, splits, creates, updates, deletions, then
+   * memberships. Pairs go first: the new row of a pair takes the deleted
+   * row's identity, so it must not have claimed a uid of its own, and a
+   * paired deletion is a move, not a deletion. Creates of every account come
+   * before deletions of any, so a move between accounts never destroys
+   * first. A `stateMismatch` downloads the account again and repeats the
+   * phase, at most three times.
    */
   protected async uploadAll(): Promise<void> {
+    const accounts = this.accountIds();
+    for (const acct of accounts) await this.withRetries(acct, () => this.pairPhase(acct));
     await this.claimNewItems();
     const deletionsAllowed = await this.deletionPolicy(await this.loadUploadItems());
-    const accounts = this.accountIds();
     for (const acct of accounts) await this.withRetries(acct, () => this.prePhase(acct));
     for (const phase of ['create', 'update', 'delete'] as const) {
       for (const acct of accounts) await this.withRetries(acct, () => this.phase(acct, phase, deletionsAllowed));

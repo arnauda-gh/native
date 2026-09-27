@@ -3,9 +3,10 @@
 // the planners' own tests; these check what the engine guarantees.
 
 import { describe, expect, it } from 'vitest';
-import { Data, MimeType } from '../../android-columns';
+import { Attendees, Data, Events, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
+import type { Row } from '../../types';
 import {
   addDeviceContact,
   addServerCards,
@@ -19,6 +20,36 @@ function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
   const h = createHarness(options);
   h.deps.planners = { contacts: contactsPlanner, calendar: calendarPlanner };
   return h;
+}
+
+/** The event columns Etar copies into the row it inserts when it moves an event or ends its recurrence. */
+const ETAR_COPY = [
+  Events.TITLE, Events.DESCRIPTION, Events.EVENT_LOCATION, Events.STATUS, Events.AVAILABILITY, Events.ACCESS_LEVEL,
+  Events.EVENT_COLOR, Events.DTSTART, Events.DTEND, Events.DURATION, Events.EVENT_TIMEZONE, Events.ALL_DAY, Events.RRULE,
+];
+
+/** Etar's move or "series to single event": the row is deleted and a copy (with its attendees) inserted. */
+function etarReinsert(h: Harness, old: Row, calendarRowId: number, changes: Row = {}): number {
+  const values: Row = {};
+  for (const c of ETAR_COPY) if (old[c] !== undefined) values[c] = old[c];
+  const attendees = h.device.rows('attendees')
+    .filter((a) => Number(a.event_id) === Number(old._id))
+    .map((a) => ({
+      [Attendees.ATTENDEE_EMAIL]: a[Attendees.ATTENDEE_EMAIL],
+      [Attendees.ATTENDEE_NAME]: a[Attendees.ATTENDEE_NAME],
+      [Attendees.ATTENDEE_RELATIONSHIP]: a[Attendees.ATTENDEE_RELATIONSHIP],
+      [Attendees.ATTENDEE_TYPE]: a[Attendees.ATTENDEE_TYPE],
+      [Attendees.ATTENDEE_STATUS]: a[Attendees.ATTENDEE_STATUS],
+    }));
+  h.device.user.deleteEvent(Number(old._id));
+  return h.device.user.insertEvent(calendarRowId, { ...values, ...changes }, { attendees });
+}
+
+/** Masters (no ORIGINAL_*) that share a `_SYNC_ID`: a split the next run would resolve by destroy + create. */
+function sharedIdentities(h: Harness): string[] {
+  const masters = h.events().filter((e) => e[Events.ORIGINAL_ID] === null && e[Events.ORIGINAL_SYNC_ID] === null && e._sync_id);
+  const ids = masters.map((e) => String(e._sync_id));
+  return ids.filter((id, i) => ids.indexOf(id) !== i);
 }
 
 /** A device edit of the display name only, as AOSP Contacts makes it (the provider fills the components). */
@@ -190,6 +221,153 @@ describe('device sync engine with the real planners', () => {
     expect(next.uid).not.toBe('series-uid');
     expect(h.events().find((e) => Number(e._id) === later)).toMatchObject({ _sync_id: `a/${next.id}` });
     expect(h.events().every((e) => Number(e.dirty ?? 0) === 0)).toBe(true);
+  });
+
+  it("uploads Etar's move to another calendar as a patch of the same event, keeping what the device can't show", async () => {
+    const h = real();
+    const work = h.server.addCalendar('a', { name: 'Work' });
+    const lunch = h.server.addEvent('a', {
+      uid: 'lunch-uid',
+      title: 'Lunch',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      keywords: { important: true },
+      virtualLocations: { v1: { '@type': 'VirtualLocation', uri: 'https://meet.example.com/lunch' } },
+      organizerCalendarAddress: 'mailto:alice@example.com',
+      participants: {
+        me: { '@type': 'Participant', calendarAddress: 'mailto:alice@example.com', roles: { owner: true, attendee: true }, participationStatus: 'accepted' },
+        bob: { '@type': 'Participant', calendarAddress: 'mailto:bob@example.com', name: 'Bob', roles: { attendee: true }, participationStatus: 'accepted' },
+      },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const old = h.events().find((e) => e._sync_id === `a/${lunch}`)!;
+    const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+
+    const moved = etarReinsert(h, old, workRow);
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 1, deleted: 0 } } });
+    expect(h.server.all('CalendarEvent', 'a')).toHaveLength(1);
+    const event = h.server.get('CalendarEvent', 'a', lunch)!;
+    expect(event.calendarIds).toEqual({ [work]: true });
+    expect(event).toMatchObject({
+      uid: 'lunch-uid',
+      keywords: { important: true },
+      virtualLocations: { v1: { uri: 'https://meet.example.com/lunch' } },
+      participants: { bob: { participationStatus: 'accepted' } },
+    });
+    // A move tells nobody.
+    expect(h.server.scheduling).toEqual([]);
+    expect(h.events()).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${lunch}`, uid2445: 'lunch-uid', calendar_id: workRow, dirty: 0 })]);
+
+    const before = h.batches.log.length;
+    expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+    expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
+  });
+
+  it('uploads a series Etar turned into a single event as the removal of its rule', async () => {
+    const h = real();
+    const series = h.server.addEvent('a', {
+      uid: 'series-uid',
+      title: 'Standup',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT15M',
+      timeZone: 'Europe/Berlin',
+      keywords: { team: true },
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const old = h.events().find((e) => e._sync_id === `a/${series}`)!;
+
+    const single = etarReinsert(h, old, Number(old.calendar_id), {
+      [Events.RRULE]: null,
+      [Events.DURATION]: null,
+      [Events.DTEND]: Number(old[Events.DTSTART]) + 15 * 60_000,
+    });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 1, deleted: 0 } } });
+    expect(h.server.all('CalendarEvent', 'a')).toHaveLength(1);
+    const event = h.server.get('CalendarEvent', 'a', series)!;
+    expect(event).toMatchObject({ uid: 'series-uid', title: 'Standup', keywords: { team: true } });
+    expect(event.recurrenceRule).toBeUndefined();
+    expect(h.events()).toEqual([expect.objectContaining({ _id: single, _sync_id: `a/${series}`, rrule: null, dirty: 0 })]);
+  });
+
+  it('never leaves two rows with one identity when the moved event is edited while its move uploads', async () => {
+    const h = real();
+    const work = h.server.addCalendar('a', { name: 'Work' });
+    const lunch = h.server.addEvent('a', {
+      uid: 'lunch-uid',
+      title: 'Lunch',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const old = h.events().find((e) => e._sync_id === `a/${lunch}`)!;
+    const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+    const moved = etarReinsert(h, old, workRow);
+    let edited = false;
+    const stop = h.server.onAfterRequest((request) => {
+      if (edited || !request.methods.includes('CalendarEvent/set')) return;
+      edited = true;
+      h.device.user.updateEvent(moved, { [Events.TITLE]: 'Team lunch' });
+    });
+
+    await h.run(CALENDAR_AUTHORITY);
+    stop();
+
+    expect(edited).toBe(true);
+    expect(sharedIdentities(h)).toEqual([]);
+    expect(h.events().find((e) => Number(e._id) === moved)).toMatchObject({ title: 'Team lunch' });
+
+    expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+    expect(sharedIdentities(h)).toEqual([]);
+    const server = h.server.all('CalendarEvent', 'a');
+    expect(server.map((e) => [e.title, e.calendarIds])).toEqual([['Team lunch', { [work]: true }]]);
+    expect(h.events()).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${server[0].id}`, dirty: 0 })]);
+  });
+
+  it('pairs the rows again when an app rewrote the moved event unchanged while its move uploaded', async () => {
+    const h = real();
+    const work = h.server.addCalendar('a', { name: 'Work' });
+    const lunch = h.server.addEvent('a', {
+      uid: 'lunch-uid',
+      title: 'Lunch',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      keywords: { important: true },
+      organizerCalendarAddress: 'mailto:alice@example.com',
+      participants: {
+        me: { '@type': 'Participant', calendarAddress: 'mailto:alice@example.com', roles: { owner: true, attendee: true }, participationStatus: 'accepted' },
+        bob: { '@type': 'Participant', calendarAddress: 'mailto:bob@example.com', name: 'Bob', roles: { attendee: true }, participationStatus: 'accepted' },
+      },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const old = h.events().find((e) => e._sync_id === `a/${lunch}`)!;
+    const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+    const moved = etarReinsert(h, old, workRow);
+    const stop = h.server.onAfterRequest((request) => {
+      if (!request.methods.includes('CalendarEvent/set')) return;
+      stop();
+      // Fossify's save: the same attendees, deleted and inserted again.
+      const attendees = h.device.rows('attendees').filter((a) => Number(a.event_id) === moved).map(({ _id, event_id, ...a }) => a);
+      h.device.user.fossifySaveEvent(moved, {}, attendees, []);
+    });
+
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0, updated: 1, deleted: 0 } } });
+    expect(h.server.all('CalendarEvent', 'a')).toHaveLength(1);
+    expect(h.server.get('CalendarEvent', 'a', lunch)).toMatchObject({ uid: 'lunch-uid', calendarIds: { [work]: true }, keywords: { important: true } });
+    expect(h.events()).toEqual([expect.objectContaining({ _id: moved, _sync_id: `a/${lunch}`, dirty: 0 })]);
   });
 
   it('syncs events both ways and writes nothing for its own echo', async () => {

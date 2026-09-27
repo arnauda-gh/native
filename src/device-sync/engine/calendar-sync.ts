@@ -5,6 +5,7 @@
  */
 import { findTasksOnlyCalendarIds, isTaskLikeObject, SCAN_PROPERTIES, type ScannedCalendarObject } from '../../lib/calendar-component-detection';
 import { collectionKey, parseCollectionKey, parseObjectRef, pendingUidOf } from '../common/ids';
+import { deepEqual } from '../common/json';
 import type { CalendarContext, CalendarEventWire, CalendarLike, CalendarPlanner, LocalCalendar, LocalEvent, OpGroup } from '../planner';
 import { CALENDAR_AUTHORITY, type ReminderOwner, type Row } from '../types';
 import { CALENDAR_EVENT_PROPERTIES, CALENDAR_PROPERTIES } from '../wire';
@@ -15,7 +16,7 @@ import type { SubscriptionCalendar } from './deps';
 import { ItemSync, type Pending } from './item-sync';
 import { accountOfRef, idInAccount, refOf, type Held, type Kind, type ServerObject } from './kinds';
 import { poisonFingerprint } from './poison';
-import { flag, num, str } from './provider';
+import { flag, hasWrites, num, str } from './provider';
 import { isCollectionSelected } from './selection';
 import { accountOf, type SyncState } from './sync-state';
 
@@ -23,6 +24,8 @@ const MASTER = 'original_id IS NULL AND original_sync_id IS NULL';
 const WITH_IDENTITY = "_sync_id IS NOT NULL AND _sync_id NOT LIKE '~pending/%'";
 /** CalendarProvider leaves DIRTY (and may leave DELETED) NULL on sync-adapter inserts: NULL is clean. */
 const CLEAN = '(dirty IS NULL OR dirty = 0) AND (deleted IS NULL OR deleted = 0)';
+
+type PairPlan = ReturnType<CalendarPlanner['planPairs']>[number];
 
 function onIds(map: Record<string, boolean> | undefined | null): string[] {
   return Object.entries(map ?? {})
@@ -411,41 +414,47 @@ export class CalendarSync extends ItemSync {
 
   /**
    * Before the creates: a split's source uploads its rule while the split is
-   * still visible, then its clone is claimed as a new event; and deleted +
-   * new masters of the run that are one edit (a move, a series turned
-   * single) upload as patches of the existing object.
+   * still visible, then its clone is claimed as a new event.
    */
   protected async prePhase(acct: string): Promise<void> {
-    let items = (await this.loadUploadItems()).filter((h) => this.accountOfItem(h) === acct);
+    const items = (await this.loadUploadItems()).filter((h) => this.accountOfItem(h) === acct);
     const sources = items.filter((h) => (h.local as LocalEvent).split === 'source');
     const clones = items.filter((h) => (h.local as LocalEvent).split === 'clone');
-    if (sources.length || clones.length) {
-      const works: Work[] = [];
-      const ready: Pending[] = [];
-      for (const held of sources) {
-        const pending = await this.planItem(acct, held, works);
-        if (pending) ready.push(pending);
-      }
-      // A clone (of a split, or a new master whose uid another row carries) needs no source:
-      // it claims a fresh uid here and is created with the other new events.
-      for (const held of clones) {
-        const pending = await this.planItem(acct, held, works);
-        if (pending) ready.push(pending);
-      }
-      await this.env.writer.write(works);
-      if (ready.length) await this.send(acct, ready);
-      items = (await this.loadUploadItems()).filter((h) => this.accountOfItem(h) === acct);
+    if (!sources.length && !clones.length) return;
+    const works: Work[] = [];
+    const ready: Pending[] = [];
+    for (const held of sources) {
+      const pending = await this.planItem(acct, held, works);
+      if (pending) ready.push(pending);
     }
+    // A clone (of a split, or a new master whose uid another row carries) needs no source:
+    // it claims a fresh uid here and is created with the other new events.
+    for (const held of clones) {
+      const pending = await this.planItem(acct, held, works);
+      if (pending) ready.push(pending);
+    }
+    await this.env.writer.write(works);
+    if (ready.length) await this.send(acct, ready);
+  }
+
+  /**
+   * Before new rows are claimed: deleted and new masters of the run that are
+   * one edit (a move, a series turned single) upload as patches of the
+   * existing object, and the new row takes the old one's identity. The
+   * planner pairs only a new row that has not claimed a uid of its own.
+   */
+  protected async pairPhase(acct: string): Promise<void> {
+    const items = (await this.loadUploadItems()).filter((h) => this.accountOfItem(h) === acct);
     const deleted = items.map((h) => h.local as LocalEvent).filter((e) => {
       const m = this.eventKind.meta(e);
       return m.deleted && !!m.sourceId;
     });
     const fresh = items.map((h) => h.local as LocalEvent).filter((e) => {
       const m = this.eventKind.meta(e);
-      return m.isNew && !m.deleted && !!m.pending;
+      return m.isNew && !m.deleted && !m.pending;
     });
     if (!deleted.length || !fresh.length) return;
-    let pairs: ReturnType<CalendarPlanner['planPairs']>;
+    let pairs: PairPlan[];
     try {
       pairs = this.planner.planPairs(deleted, fresh, this.ctx(acct));
     } catch (error) {
@@ -465,16 +474,25 @@ export class CalendarSync extends ItemSync {
         actions: pair.actions as Pending['actions'],
         accept: async (objects) => {
           // The new row takes the identity and exceptions of the old one, which is purged.
-          await this.env.writer.write([{ group: pair.ops }]);
-          const [moved] = await this.eventKind.loadByRowIds([pair.fresh.eventId]);
+          let paired = false;
+          await this.env.writer.write([this.pairWork(acct, pair, () => {
+            paired = true;
+          })]);
+          const [moved] = paired ? await this.eventKind.loadByRowIds([pair.fresh.eventId]) : [];
           const server = ownId ? objects.get(ownId) : undefined;
           if (!moved || !server) {
+            // Fetched again first next run. Rows that no longer pair (the new one was edited
+            // meanwhile) upload as a create and a deletion; neither takes the identity here.
             if (ownId) this.markStale(acct, ownId);
             return [];
           }
           const held: Held = { kind: this.eventKind, local: moved };
           try {
-            return [this.acceptWork(acct, { held, meta: this.eventKind.meta(moved), fingerprint: '', actions: [] }, server, false)];
+            const work = this.acceptWork(acct, { held, meta: this.eventKind.meta(moved), fingerprint: '', actions: [] }, server, false);
+            if (hasWrites(work.group.ops)) return [work];
+            // The pair's ops already wrote what the server holds.
+            this.env.report.stats.uploaded.updated++;
+            return [];
           } catch (error) {
             this.plannerFailed(acct, refOf(acct, server.id), 'upload', error, server.id);
             return [];
@@ -483,6 +501,32 @@ export class CalendarSync extends ItemSync {
       };
     });
     await this.send(acct, pending);
+  }
+
+  /**
+   * A pair's rows after the server took its patch. When their assert fails
+   * (an app changed them during the upload), both rows are read and paired
+   * again; only a pair that uploads the same patch is written.
+   */
+  private pairWork(acct: string, pair: PairPlan, applied: () => void): Work {
+    return {
+      group: pair.ops,
+      applied,
+      replan: async () => {
+        const rows = await this.eventKind.loadByRowIds([pair.deleted.eventId, pair.fresh.eventId]);
+        const deleted = rows.find((e) => e.eventId === pair.deleted.eventId);
+        const fresh = rows.find((e) => e.eventId === pair.fresh.eventId);
+        if (!deleted || !fresh) return null;
+        let again: PairPlan | undefined;
+        try {
+          [again] = this.planner.planPairs([deleted], [fresh], this.ctx(acct));
+        } catch (error) {
+          this.plannerFailed(acct, pair.deleted.syncId ?? `pairs:${acct}`, 'upload', error);
+          return null;
+        }
+        return again && deepEqual(again.actions, pair.actions) ? this.pairWork(acct, again, applied) : null;
+      },
+    };
   }
 
   // ── After the upload ──
