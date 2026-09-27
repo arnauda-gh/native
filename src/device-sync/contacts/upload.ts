@@ -30,8 +30,8 @@ import { deletionsInferred, inPlaceEvidence, matchKind, type KindMatch } from '.
 import { shadowMemberOf, withMemberOf, withoutMemberOf } from './members';
 import { NAME_COLUMNS, namePatch } from './name';
 import { assertContact, deleteWhereId, updateRawContact, updateWhereId } from './ops';
-import { isHashUri, jpegDataUri, shadowOf } from './photo';
-import { KIND_ORDER, SPECS } from './project';
+import { isHashUri, isPhotoAbsent, jpegDataUri, photoEntry, shadowOf, withPhotoAbsent } from './photo';
+import { isEmptyRow, KIND_ORDER, SPECS } from './project';
 
 type Ctx = ContactsContext;
 
@@ -116,7 +116,8 @@ function photoChanges(local: LocalContact, kind: KindMatch, evidence: boolean, c
     } else {
       out.added.push({ map: 'media', value: { kind: 'photo', uri, mediaType: 'image/jpeg' } });
     }
-  } else if (!row && deletionsInferred(kind, evidence)) {
+  } else if (!row && deletionsInferred(kind, evidence) && !isPhotoAbsent(local.shadow)) {
+    // (A photo the device could not be given was never there to delete.)
     for (const unit of kind.missing) out.removed.push(...unitEntries(kind.mimetype, unit.key));
   }
 }
@@ -286,7 +287,12 @@ export function planContactAccepted(local: LocalContact, server: ContactCardWire
   // Edited again during the upload: identity and shadow, and the baselines of
   // the uploaded units set to what was uploaded; rows and DIRTY stay.
   const changes = local.shadow ? collectChanges(local, withoutMemberOf(local.shadow), ctx) : null;
-  const shadow = withMemberOf(shadowOf(withoutMemberOf(server)), shadowMemberOf(local.shadow) ?? (local.shadow ? null : []));
+  // The rows stay, so a photo the device could not be given is still not there.
+  const photoRow = local.rows.some((r) => r.mimetype === MimeType.PHOTO && !isEmptyRow(MimeType.PHOTO, r.cells));
+  const shadow = withPhotoAbsent(
+    withMemberOf(shadowOf(withoutMemberOf(server)), shadowMemberOf(local.shadow) ?? (local.shadow ? null : [])),
+    isPhotoAbsent(local.shadow) && !photoRow && photoEntry(server) !== null,
+  );
   const keep: ProviderOp[] = [
     updateRawContact(local.rawContactId, { ...raw, [RawContacts.SYNC2]: JSON.stringify(shadow) }),
   ];

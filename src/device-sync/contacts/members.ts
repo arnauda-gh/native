@@ -24,6 +24,7 @@ import type { ProviderOp } from '../types';
 import { text } from './cells';
 import { entryKey } from './keys';
 import { deleteData, insertUnit, updateData } from './ops';
+import { NO_PHOTO } from './photo';
 import { MEMBER_OF, type Unit } from './project';
 
 /**
@@ -55,10 +56,10 @@ export function shadowMemberOf(shadow: ContactCardWire | null): string[] | null 
   return Array.isArray(v) && v.every((g) => typeof g === 'string') ? [...v] : null;
 }
 
-/** A card without the `~memberOf` a shadow carries. */
+/** A card without the device-only members a shadow carries: `~memberOf`, and `~noPhoto` (photo.ts). */
 export function withoutMemberOf(card: ContactCardWire): ContactCardWire {
-  if (!(MEMBER_OF in card)) return card;
-  const { [MEMBER_OF]: _drop, ...rest } = card;
+  if (!(MEMBER_OF in card) && !(NO_PHOTO in card)) return card;
+  const { [MEMBER_OF]: _drop, [NO_PHOTO]: _photo, ...rest } = card;
   return rest as ContactCardWire;
 }
 

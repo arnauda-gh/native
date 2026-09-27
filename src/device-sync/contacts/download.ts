@@ -22,7 +22,7 @@ import { localChanges, sameUnit } from './diff';
 import { deletionsInferred, inPlaceEvidence, matchKind, reconcileKeys, type KindMatch } from './matching';
 import { editableGroups, planMemberships, remoteMemberships, shadowMemberOf, withMemberOf, withoutMemberOf } from './members';
 import { assertContact, deleteData, insertUnit, updateData, updateRawContact, updateUnit } from './ops';
-import { shadowOf } from './photo';
+import { isPhotoAbsent, shadowOf, withPhotoAbsent } from './photo';
 import { KIND_ORDER, projectCard, rowMatchesUnit, SPECS, type Unit } from './project';
 
 const ENTRY_KINDS = KIND_ORDER.filter((k) => k !== MimeType.GROUP_MEMBERSHIP);
@@ -90,6 +90,8 @@ interface RowPlan {
   conflicts: number;
   stillDirty: boolean;
   evidence: boolean;
+  /** The card's photo is left without a row because it could not be written (the shadow's `~noPhoto`). */
+  photoAbsent: boolean;
 }
 
 /**
@@ -99,6 +101,7 @@ interface RowPlan {
  */
 function cleanRows(local: LocalContact, remote: Unit[], keyMap: Map<string, string>, base: Unit[], accepted: boolean): RowPlan {
   const ops: ProviderOp[] = [];
+  let photoAbsent = false;
   const rows = renameRows(local.rows, base, keyMap);
   const kinds = ENTRY_KINDS.map((k) => matchKind(k, rows, remote));
   for (const kind of kinds) {
@@ -130,11 +133,14 @@ function cleanRows(local: LocalContact, remote: Unit[], keyMap: Map<string, stri
     }
     for (const row of kind.fresh) ops.push(deleteData(row.id));
     for (const unit of kind.missing) {
-      if (unit.mimetype === MimeType.PHOTO && !unit.extra) continue;
+      if (unit.mimetype === MimeType.PHOTO && !unit.extra) {
+        photoAbsent = true;
+        continue;
+      }
       ops.push(insertUnit(local.rawContactId, unit, true));
     }
   }
-  return { ops, conflicts: 0, stillDirty: false, evidence: inPlaceEvidence(kinds) };
+  return { ops, conflicts: 0, stillDirty: false, evidence: inPlaceEvidence(kinds), photoAbsent };
 }
 
 /** Per-unit merge of a dirty contact's rows with a new server version; the server wins real conflicts. */
@@ -142,6 +148,7 @@ function mergeRows(local: LocalContact, base: Unit[], remote: Unit[], keyMap: Ma
   const ops: ProviderOp[] = [];
   let conflicts = 0;
   let stillDirty = false;
+  let photoAbsent = false;
   const rows = renameRows(local.rows, base, keyMap);
   const renamedBase = renameUnits(base, keyMap);
   const kinds: KindMatch[] = ENTRY_KINDS.map((k) => matchKind(k, rows, renamedBase));
@@ -149,11 +156,14 @@ function mergeRows(local: LocalContact, base: Unit[], remote: Unit[], keyMap: Ma
   const mapped = new Set(keyMap.values());
 
   for (const kind of kinds) {
+    const start = ops.length;
     const remoteOf = new Map(remote.filter((u) => u.mimetype === kind.mimetype).map((u) => [u.key, u]));
     const hasKeyed = kind.matched.some((m) => m.how === 'key');
     const hasKeyless = kind.fresh.length > 0 || kind.matched.some((m) => m.how !== 'key');
     const keyed = hasKeyed || !hasKeyless;
-    const deletions = kind.mimetype !== MimeType.STRUCTURED_NAME && deletionsInferred(kind, evidence);
+    // A photo the device never held (`~noPhoto`) was not deleted there.
+    const deletions = kind.mimetype !== MimeType.STRUCTURED_NAME && deletionsInferred(kind, evidence)
+      && !(kind.mimetype === MimeType.PHOTO && isPhotoAbsent(local.shadow));
     const write = (row: LocalDataRow, unit: Unit) => {
       if (unit.mimetype === MimeType.PHOTO && !unit.extra) return;
       ops.push(updateUnit(row.id, unit, keyed));
@@ -209,8 +219,15 @@ function mergeRows(local: LocalContact, base: Unit[], remote: Unit[], keyMap: Ma
       }
     }
     if (fresh.length) stillDirty = true;
+
+    if (kind.mimetype === MimeType.PHOTO) {
+      // The server's photo is left without a row it could not get, unless a local deletion of it waits for its upload.
+      const photo = [...remoteOf.values()][0];
+      const deletionWaits = !!photo && deletions && kind.missing.some((u) => sameUnit(u, photo));
+      photoAbsent = !!photo && !kind.rows.length && !ops.slice(start).some((o) => o.op === 'insert') && !deletionWaits;
+    }
   }
-  return { ops, conflicts, stillDirty, evidence };
+  return { ops, conflicts, stillDirty, evidence, photoAbsent };
 }
 
 export interface CleanWriteOptions {
@@ -251,7 +268,7 @@ export function cleanWrite(local: LocalContact, card: ContactCardWire, ctx: Ctx,
     groupRowIdBySourceId: (g) => ctx.groupRowIdBySourceId(g),
     editable: editableGroups(ctx, accountOf(local, ctx)),
   });
-  const shadow = withMemberOf(shadowOf(server), members.memberOf);
+  const shadow = withPhotoAbsent(withMemberOf(shadowOf(server), members.memberOf), rows.photoAbsent);
   const raw = changedRawColumns(local, {
     ...cardColumns(server, shadow, ctx),
     ...(options.raw ?? {}),
@@ -282,7 +299,8 @@ function insertPlan(card: ContactCardWire, ctx: Ctx): DownloadPlan {
     parent: { ref: 0 },
     groupRowIdBySourceId: (g) => ctx.groupRowIdBySourceId(g),
   });
-  const shadow = withMemberOf(shadowOf(card), members.memberOf);
+  // A photo without bytes to write (too large, or not fetched) stays on the server only.
+  const shadow = withPhotoAbsent(withMemberOf(shadowOf(card), members.memberOf), units.some((u) => u.mimetype === MimeType.PHOTO && !u.extra));
   const ops: ProviderOp[] = [
     { op: 'insert', table: 'raw_contacts', values: { [RawContacts.SOURCE_ID]: identity, [RawContacts.DIRTY]: 0, ...cardColumns(card, shadow, ctx) } },
     ...units.filter((u) => u.mimetype !== MimeType.PHOTO || u.extra).map((u) => insertUnit({ ref: 0 }, u, true)),
@@ -349,7 +367,7 @@ export function planContactDownload(card: ContactCardWire, local: LocalContact |
     parent: local.rawContactId,
     groupRowIdBySourceId: (g) => ctx.groupRowIdBySourceId(g),
   });
-  const shadow = withMemberOf(shadowOf(server), members.memberOf);
+  const shadow = withPhotoAbsent(withMemberOf(shadowOf(server), members.memberOf), rows.photoAbsent);
   const raw = changedRawColumns(local, cardColumns(server, shadow, ctx));
   const ops: ProviderOp[] = [];
   if (Object.keys(raw).length) ops.push(updateRawContact(local.rawContactId, raw));

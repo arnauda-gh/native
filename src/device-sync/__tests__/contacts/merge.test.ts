@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Data, MimeType, RawContacts } from '../../android-columns';
 import type { ContactCardWire } from '../../planner';
-import { appleCard, googleCard } from './fixtures';
+import { appleCard, googleCard, probeCard } from './fixtures';
 import { Harness, JMAP } from './harness';
 
 /** A seeded card, edited on the device (in place, like AOSP) and on the server. */
@@ -83,6 +83,16 @@ describe('contacts merge: a dirty contact meets a new server version', () => {
     const patch = await patchOf(h, rawId) as Record<string, unknown>;
     expect(Object.keys(patch)).toEqual(['phones']);
     expect(Object.keys(patch.phones as object)).toEqual(['k1', 'k2']);
+  });
+
+  it('still uploads a photo deleted on the device after merging a server edit of another entry', async () => {
+    const { h, rawId, plan } = await bothEdited(
+      probeCard,
+      (hh, raw) => hh.device.user.deleteData(hh.rowsByKey(raw)['media:ph']._id as number),
+      { 'emails/zz9/address': 'new@example.org' },
+    );
+    expect(plan).toMatchObject({ conflicts: 0, stillDirty: true });
+    expect(await patchOf(h, rawId)).toEqual({ media: null });
   });
 
   it('matches an entry both sides added instead of duplicating it', async () => {

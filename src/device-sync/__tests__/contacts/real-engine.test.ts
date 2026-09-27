@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { Groups, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
-import { addServerCards, CONTACTS_AUTHORITY, createHarness, type Harness } from '../engine/harness';
+import { addServerCards, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
 import type { SetTarget } from '../fakes/fake-jmap-server';
 
 function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
@@ -76,6 +76,28 @@ describe('contacts through the engine', () => {
     expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();
     // Turning sync off finds nothing waiting.
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
+  it('syncs a contact whose photo is too large for a provider batch, without the photo', async () => {
+    const h = real();
+    // About 900 KB of JPEG as a data: URI (a camera photo set over CardDAV).
+    const media = { p1: { '@type': 'Media', kind: 'photo', uri: `data:image/jpeg;base64,${'A'.repeat(1_200_000)}`, mediaType: 'image/jpeg' } };
+    const card = h.server.addCard('a', { uid: 'u-photo', name: { full: 'Photo Person' }, emails: { e1: { address: 'photo@example.org' } }, addressBookIds: { [h.book]: true }, media });
+    addServerCards(h, ['Plain Person']);
+
+    expect(await h.run()).toMatchObject({ outcome: 'ok', itemErrors: [] });
+    expect(h.contacts().map((c) => c.name).sort()).toEqual(['Photo Person', 'Plain Person']);
+    expect(h.state()?.accounts.a.stale).toEqual([]);
+    const before = h.batches.log.length;
+    expect((await h.run()).outcome).toBe('ok');
+    expect(rowWrites(h.batches.log.slice(before))).toEqual([]);
+
+    // Its device edits upload, and the photo stays on the server.
+    const id = h.contactNamed('Photo Person')!.id;
+    const email = h.device.rows('data').find((d) => Number(d.raw_contact_id) === id && d.mimetype === MimeType.EMAIL)!;
+    h.device.user.updateData(Number(email._id), { data1: 'photo2@example.org' });
+    expect(await h.run()).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+    expect(h.server.get('ContactCard', 'a', card)).toMatchObject({ emails: { e1: { address: 'photo2@example.org' } }, media });
   });
 
   it('keeps a group rename the server refused when a membership patch of that group goes through', async () => {

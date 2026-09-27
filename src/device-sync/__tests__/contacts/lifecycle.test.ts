@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Data, MimeType } from '../../android-columns';
+import { MAX_PHOTO_BASE64 } from '../../contacts/photo';
 import type { LocalContact } from '../../planner';
-import { JPEG, probeCard } from './fixtures';
+import { JPEG, JPEG2, probeCard } from './fixtures';
 import { Harness, JMAP } from './harness';
 
 /** The engine's view after every write: a clean contact whose rows the server card describes. */
@@ -98,6 +99,86 @@ describe('contacts lifecycle', () => {
     expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toMatchObject({ kind: 'upload', actions: [{ patch: { 'emails/e1/address': 'c@example.org' } }] });
     const plan = h.planner.planUpload(await h.contact(rawId), h.ctx);
     expect(plan.kind === 'upload' && Object.keys((plan.actions[0] as { patch: object }).patch)).toEqual(['emails/e1/address']);
+  });
+
+  it('keeps a photo too large for a provider batch on the server only, and never reads it as deleted', async () => {
+    const h = new Harness();
+    // About 900 KB of JPEG: the fake provider refuses a batch over 1 MB, as Binder does.
+    const big = 'A'.repeat(1_200_000);
+    const { id, rawId } = await h.seed({
+      name: { full: 'Big Photo' },
+      emails: { e1: { address: 'a@example.org' } },
+      media: { p: { kind: 'photo', uri: `data:image/jpeg;base64,${big}`, mediaType: 'image/jpeg' } },
+    });
+    // The contact is there, without the photo; its echo writes nothing.
+    expect(Object.keys(h.rowsByKey(rawId)).sort()).toEqual(['emails:e1', 'name']);
+    await expectSettled(h, id, rawId);
+
+    h.device.user.updateData(h.rowsByKey(rawId)['emails:e1']._id as number, { data1: 'b@example.org' });
+    expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id, patch: { 'emails/e1/address': 'b@example.org' } }],
+    });
+    await h.upload(rawId);
+    expect(h.card(id).media).toEqual({ p: { kind: 'photo', uri: `data:image/jpeg;base64,${big}`, mediaType: 'image/jpeg' } });
+    await expectSettled(h, id, rawId);
+
+    // A photo set on the device replaces it.
+    h.device.user.setPhoto(rawId, JPEG2);
+    h.devicePhotos.set(rawId, JPEG2);
+    expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id, patch: { 'media/p/uri': `data:image/jpeg;base64,${JPEG2}`, 'media/p/mediaType': 'image/jpeg' } }],
+    });
+    await h.upload(rawId);
+    expect(h.device.photo(Number(h.rowsByKey(rawId)['media:p'].data14))).toBe(JPEG2);
+    await expectSettled(h, id, rawId);
+  });
+
+  it('writes a photo up to the budget of a provider batch, and none beyond it', async () => {
+    const h = new Harness();
+    const seedPhoto = (b64: string) => h.seed({ name: { full: 'Sized' }, media: { p: { kind: 'photo', uri: `data:image/jpeg;base64,${b64}` } } });
+    const fits = 'A'.repeat(MAX_PHOTO_BASE64);
+    const within = await seedPhoto(fits);
+    expect(h.device.photo(Number(h.rowsByKey(within.rawId)['media:p'].data14))).toBe(fits);
+    await expectSettled(h, within.id, within.rawId);
+    const beyond = await seedPhoto('A'.repeat(MAX_PHOTO_BASE64 + 4));
+    expect(h.rowsByKey(beyond.rawId)['media:p']).toBeUndefined();
+    await expectSettled(h, beyond.id, beyond.rawId);
+  });
+
+  it('never reads a photo whose bytes could not be fetched as deleted, and writes it once they can be', async () => {
+    const h = new Harness();
+    const { id, rawId } = await h.seed({
+      name: { full: 'Blob Photo' },
+      emails: { e1: { address: 'a@example.org' } },
+      media: { p: { kind: 'photo', blobId: 'B1', mediaType: 'image/jpeg' } },
+    });
+    expect(h.rowsByKey(rawId)['media:p']).toBeUndefined();
+    h.device.user.updateData(h.rowsByKey(rawId)['emails:e1']._id as number, { data1: 'b@example.org' });
+    expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id, patch: { 'emails/e1/address': 'b@example.org' } }],
+    });
+    await h.upload(rawId);
+    expect(h.card(id).media).toEqual({ p: { kind: 'photo', blobId: 'B1', mediaType: 'image/jpeg' } });
+
+    // With the bytes at hand, the next write of the card brings the photo.
+    h.blobs.set('B1', JPEG);
+    h.server.serverUpdate('ContactCard', JMAP, id, { 'emails/e1/address': 'c@example.org' });
+    await h.download(id);
+    expect(h.device.photo(Number(h.rowsByKey(rawId)['media:p'].data14))).toBe(JPEG);
+    await expectSettled(h, id, rawId);
+  });
+
+  it('does not read a server photo it could not write as deleted after merging it into an edited contact', async () => {
+    const h = new Harness();
+    const { id, rawId } = await h.seed({ name: { full: 'Merge Photo' }, emails: { e1: { address: 'a@example.org' } }, phones: { p1: { number: '1' } } });
+    // The server adds a photo too large to write while the device edits the phone.
+    h.device.user.updateData(h.rowsByKey(rawId)['phones:p1']._id as number, { data1: '2' });
+    const big = 'A'.repeat(1_200_000);
+    h.server.serverUpdate('ContactCard', JMAP, id, { media: { p: { kind: 'photo', uri: `data:image/jpeg;base64,${big}` } } });
+    await h.applyOk(h.planner.planDownload(h.card(id), await h.contact(rawId), h.ctx).ops);
+    expect(h.planner.planUpload(await h.contact(rawId), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id, patch: { 'phones/p1/number': '2' } }],
+    });
   });
 
   it('heals a baseline the provider stored differently from the prediction', async () => {

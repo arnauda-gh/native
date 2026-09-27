@@ -11,6 +11,14 @@ import { clone } from '../common/json';
 import type { ContactCardWire, ContactsContext } from '../planner';
 
 const HASH_URI = 'sha256:';
+
+/**
+ * The largest photo (base64 characters, about 512 KiB of JPEG) written to the
+ * device: one applyBatch is one Binder transaction of at most 1 MB, and a
+ * contact's rows travel in one op group, which is never split. A larger photo
+ * stays on the server only (docs/device-sync.md, "Limits and performance").
+ */
+export const MAX_PHOTO_BASE64 = 700_000;
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const B64_INDEX = new Map([...B64].map((c, i) => [c, i]));
 
@@ -58,13 +66,33 @@ export function photoEntry(card: ContactCardWire): { key: string; entry: Contact
   return null;
 }
 
-/** Bytes (base64) and hash of a photo entry; bytes are null for a shadow's hash-only entry. */
+/**
+ * Bytes (base64) and hash of a photo entry; bytes are null for a shadow's
+ * hash-only entry and for a photo too large to write (MAX_PHOTO_BASE64).
+ */
 export function photoPayload(entry: ContactMedia, ctx: Pick<ContactsContext, 'photoBytes'>): { b64: string | null; hash: string } | null {
   const uri = typeof entry.uri === 'string' ? entry.uri : '';
   if (uri.startsWith(HASH_URI)) return { b64: null, hash: uri };
   const b64 = dataUriBase64(uri) ?? ctx.photoBytes(entry as { uri?: string; blobId?: string; mediaType?: string });
   const hash = b64 ? hashBase64(b64) : null;
-  return b64 && hash ? { b64, hash } : null;
+  if (!b64 || !hash) return null;
+  return { b64: b64.length > MAX_PHOTO_BASE64 ? null : b64, hash };
+}
+
+/**
+ * Set in a shadow whose card's photo has no row on the device because it
+ * could not be written (too large, or its bytes could not be fetched), so the
+ * missing row is no deletion. Device-only, like `~memberOf`: stripped before
+ * any projection or patch.
+ */
+export const NO_PHOTO = '~noPhoto';
+
+export function isPhotoAbsent(shadow: ContactCardWire | null): boolean {
+  return shadow?.[NO_PHOTO] === true;
+}
+
+export function withPhotoAbsent(shadow: ContactCardWire, absent: boolean): ContactCardWire {
+  return absent ? { ...shadow, [NO_PHOTO]: true } : shadow;
 }
 
 /** The shadow of a card: every `data:` photo URI replaced by the hash of its bytes. */
