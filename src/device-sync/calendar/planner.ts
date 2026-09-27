@@ -31,7 +31,7 @@ import { claimOps, claimUid, claimedUid, computeCreate, createTarget, deleteActi
 import { decodeCalendar, decodeEvents, isExceptionRow, isNewMaster } from './decode';
 import { isExcluded, overridesOf } from './exceptions';
 import { eventImage } from './image';
-import { insertEvent, isRemovedInstance, linkedExceptionCount, pickCalendar, writeEvent } from './merge';
+import { insertEvent, isRemovedInstance, linkedExceptionCount, pickCalendar, writeEvent, type CalendarTarget } from './merge';
 import { pairKind, pairOps, pairPatch } from './pairs';
 import { GroupBuilder, assertExceptionCount, assertRow, deleteRow, writesOf } from './rows';
 import { eventZone } from './timing';
@@ -52,6 +52,12 @@ function refOf(local: LocalEventRow | null, event?: CalendarEventWire, jmapAccou
   return local ? `row:${local.eventId}` : 'new';
 }
 
+/** The calendar a row is in, when it is one of ours. */
+function rowCalendar(local: LocalEventRow, ctx: CalendarContext): CalendarTarget | null {
+  const cal = ctx.calendarIdOfRow(local.calendarRowId);
+  return cal ? { calendarRowId: local.calendarRowId, calendarId: cal.calendarId } : null;
+}
+
 // ─── Downloads ──────────────────────────────────────────
 
 function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: CalendarContext): DownloadPlan {
@@ -59,7 +65,9 @@ function planDownload(event: CalendarEventWire, local: LocalEvent | null, ctx: C
   refuseTask(local?.shadow);
   const ref = refOf(local, event, ctx.jmapAccountId);
   const none = (stillDirty: boolean): DownloadPlan => ({ ops: { ref, ops: [] }, conflicts: 0, stillDirty, effect: 'none', writes: 0 });
-  const target = pickCalendar(event, local, ctx);
+  // An event another client moved out of every synced calendar still merges into its rows where they are
+  // (they wait for an upload; the accepted write then removes them).
+  const target = pickCalendar(event, local, ctx) ?? (local ? rowCalendar(local, ctx) : null);
   if (!target) throw new Error(`calendar planner: ${ref} is in no synced calendar (the engine removes such rows)`);
   const image = eventImage(event, target.calendarRowId, target.calendarId, ctx);
   // Stalwart drops a start it can't resolve (a DST gap or overlap): nothing to show.
@@ -210,10 +218,7 @@ function purgeGroup(local: LocalEvent): OpGroup {
 function revertGroup(local: LocalEvent, ctx: CalendarContext): OpGroup | null {
   const shadow = local.shadow;
   if (!shadow) return null;
-  const target = pickCalendar(shadow, local, ctx) ?? (() => {
-    const cal = ctx.calendarIdOfRow(local.calendarRowId);
-    return cal ? { calendarRowId: local.calendarRowId, calendarId: cal.calendarId } : null;
-  })();
+  const target = pickCalendar(shadow, local, ctx) ?? rowCalendar(local, ctx);
   if (!target) return null;
   const image = eventImage(shadow, target.calendarRowId, target.calendarId, ctx);
   if (!image) return null;

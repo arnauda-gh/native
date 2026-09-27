@@ -574,14 +574,14 @@ describe('device sync engine with the real planners', () => {
         'recurrenceOverrides/2026-10-01T09:00:00': { title: 'Retro' },
       });
 
-      expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+      expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
 
       const event = h.server.get('CalendarEvent', 'a', series)!;
       const titles = Object.values((event.recurrenceOverrides ?? {}) as Record<string, { title?: string }>).map((o) => o.title).sort();
       expect(titles).toEqual(['Planning', 'Retro']);
-      // The move went up, or it still waits on the device: it is not lost.
-      const row = h.events().find((e) => Number(e._id) === Number(master._id));
-      expect(event.start === '2026-09-28T10:00:00' || (Number(row?.dirty) === 1 && Number(row?.[Events.DTSTART]) === later)).toBe(true);
+      // The move went up against the server's version, and the rows went with the event.
+      expect(event).toMatchObject({ start: '2026-09-28T10:00:00', calendarIds: { [archive]: true } });
+      expect(h.events()).toEqual([]);
     });
   });
 

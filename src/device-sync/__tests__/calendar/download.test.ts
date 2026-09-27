@@ -235,6 +235,28 @@ describe('calendar planner: downloads', () => {
     expect(() => calendarPlanner.planDownload({ ...single(), '@type': undefined, due: '2026-10-01T00:00:00' } as unknown as CalendarEventWire, null, h.ctx)).toThrow(/tasks/);
   });
 
+  it('merges an edited event another client moved out of every synced calendar where its rows are', async () => {
+    const h = await new Harness().setup();
+    await h.download(single());
+    const id = Number(h.masterRow('e1')._id);
+    h.fake.user.updateEvent(id, { [Events.TITLE]: 'Team lunch' });
+    // Filed in a calendar this device does not sync, with a new description.
+    const moved = single({ calendarIds: { archive: true }, description: 'Bring salad' });
+
+    const plan = calendarPlanner.planDownload(moved, await h.local('e1'), h.ctx);
+    await h.apply(plan.ops);
+
+    expect(plan).toMatchObject({ effect: 'update', stillDirty: true, conflicts: 0 });
+    expect(h.masterRow('e1')).toMatchObject({ [Events.CALENDAR_ID]: h.rowIds.get('b'), [Events.TITLE]: 'Team lunch', [Events.DESCRIPTION]: 'Bring salad', [Events.DIRTY]: 1 });
+    const local = (await h.local('e1'))!;
+    expect(local.shadow).toEqual(moved);
+    // Only the device's edit goes up (no calendar move), and the accepted version takes the rows away.
+    const plan2 = calendarPlanner.planUpload(local, h.ctx);
+    expect(plan2.kind === 'upload' && plan2.actions).toEqual([{ kind: 'update', id: 'e1', patch: { title: 'Team lunch' } }]);
+    await h.apply(calendarPlanner.planAccepted(local, { ...moved, title: 'Team lunch' }, h.ctx).ops);
+    expect(await h.events()).toEqual([]);
+  });
+
   it('places an event in several calendars in the first selected one, and keeps it where it is', async () => {
     const h = await new Harness().setup();
     await h.download(single({ calendarIds: { w: true, b: true } }));
