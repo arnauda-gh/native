@@ -11,6 +11,8 @@
 //     through t() for the current locale, with the English fallback.
 // Kept free of React so it can be unit-tested.
 
+import { supportsDeviceSync } from './platform-capabilities';
+
 export type SettingsTabId =
   | 'account' | 'language' | 'notifications'
   | 'appearance' | 'layout'
@@ -166,6 +168,8 @@ export const SETTINGS_SEARCH_PATHS: Record<SettingsTabId, string[]> = {
     'calendar.settings.show_birthday_calendar',
     'calendar.settings.enable_tasks',
     'calendar.settings.show_tasks_on_calendar',
+    // Android only: calendars in the phone's Calendar app (#34).
+    ...(supportsDeviceSync ? ['calendar.settings.device_sync_title'] : []),
   ],
   contacts: [
     'settings.contacts.group_by_letter_label',
@@ -173,6 +177,8 @@ export const SETTINGS_SEARCH_PATHS: Record<SettingsTabId, string[]> = {
     'settings.contacts.import_label',
     'settings.contacts.export_label',
     'settings.contacts.manage_title',
+    // Android only: address books in the phone's Contacts app (#34).
+    ...(supportsDeviceSync ? ['settings.contacts.device_sync_title'] : []),
   ],
   files: [
     'files.settings_display',
@@ -238,8 +244,8 @@ export const SETTINGS_SEARCH_KEYWORDS: Record<SettingsTabId, string> = {
   security: 'password 2fa two-factor totp app password mfa api key certificate encryption',
   encryption: 's/mime smime certificate sign encrypt',
   content_senders: 'block sender remote images privacy tracking',
-  calendar: 'event schedule appointment meeting timezone',
-  contacts: 'address book contact',
+  calendar: `event schedule appointment meeting timezone${supportsDeviceSync ? ' android phone device sync' : ''}`,
+  contacts: `address book contact${supportsDeviceSync ? ' android phone device sync' : ''}`,
   files: 'attachments cloud drive storage upload',
   sidebar_apps: 'apps webview iframe',
   about_data: 'export import backup offline cache debug logs reset version',
