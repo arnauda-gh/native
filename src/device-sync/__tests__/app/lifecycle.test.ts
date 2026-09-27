@@ -260,6 +260,26 @@ describe('disable', () => {
     expect(stored.reminderOwner).toBeNull();
   });
 
+  it('lets a turn-on wait for a turn-off that is still tearing down, instead of being undone by it', async () => {
+    await disableDeviceSync(ALICE, CALENDAR_AUTHORITY);
+    let finishTeardown: () => void = () => undefined;
+    teardown.mockImplementationOnce(async (_registryId, name, authority, options) => {
+      h.state.log.push(`teardown ${name} ${authority} ${JSON.stringify(options ?? {})}`);
+      await new Promise<void>((resolve) => { finishTeardown = resolve; });
+      return { pending: 0 };
+    });
+    const turningOff = disableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    await vi.waitFor(() => expect(h.state.log).toContain(`teardown alice ${CONTACTS_AUTHORITY} {"uploadFirst":true,"timeoutMs":${TEARDOWN_TIMEOUT_MS}}`));
+    // The user opens the settings again and turns contacts sync back on.
+    const turningOn = enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+    finishTeardown();
+    expect(await turningOff).toEqual({ done: true, pending: 0 });
+    expect(await turningOn).toMatchObject({ kind: 'enabled' });
+    expect(h.find('alice')?.sync[CONTACTS_AUTHORITY]?.automatic).toBe(true);
+    expect(accountDeviceSync(ALICE).enabled?.[CONTACTS_AUTHORITY]).toBe(true);
+    expect(accountDeviceSync(ALICE).androidAccountName).toBe('alice');
+  });
+
   it('removes the Android account once both authorities are off', async () => {
     await disableDeviceSync(ALICE, CALENDAR_AUTHORITY);
     await disableDeviceSync(ALICE, CONTACTS_AUTHORITY);

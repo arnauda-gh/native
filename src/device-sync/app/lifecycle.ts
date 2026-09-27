@@ -162,6 +162,24 @@ async function refreshPushState(registryId: string): Promise<void> {
   await refreshPushSubscriptionTypes(registryId).catch(noop);
 }
 
+// ─── One step at a time ────────────────────────────────
+
+// Turning sync on and off for one app account runs one step after the other:
+// a turn-on that starts while a turn-off still tears down (the user left the
+// settings and came back) would otherwise be undone by it, down to the
+// Android account being removed right after it was turned on again.
+const accountSteps = new Map<string, Promise<unknown>>();
+
+function oneAtATime<T>(registryId: string, step: () => Promise<T>): Promise<T> {
+  const next = (accountSteps.get(registryId) ?? Promise.resolve()).catch(noop).then(step);
+  const settled = next.catch(noop);
+  accountSteps.set(registryId, settled);
+  void settled.then(() => {
+    if (accountSteps.get(registryId) === settled) accountSteps.delete(registryId);
+  });
+  return next;
+}
+
 // ─── Enable ────────────────────────────────────────────
 
 export type EnableOutcome =
@@ -174,7 +192,11 @@ export type EnableOutcome =
  * Turns device sync on for one authority of an app account. The caller has
  * asked for the permissions (and, for calendars, who reminds the user).
  */
-export async function enableDeviceSync(registryId: string, authority: Authority): Promise<EnableOutcome> {
+export function enableDeviceSync(registryId: string, authority: Authority): Promise<EnableOutcome> {
+  return oneAtATime(registryId, () => enable(registryId, authority));
+}
+
+async function enable(registryId: string, authority: Authority): Promise<EnableOutcome> {
   if (!deviceSyncAvailable()) return { kind: 'failed', message: 'Device sync is not available' };
   if (!(await hasSyncPermissions(authority))) return { kind: 'permission' };
   await waitForDeviceSyncHydration();
@@ -207,7 +229,11 @@ export async function enableDeviceSync(registryId: string, authority: Authority)
 }
 
 /** Automatic sync back on after the user kept syncing instead of losing changes. */
-export async function resumeDeviceSync(registryId: string, authority: Authority): Promise<void> {
+export function resumeDeviceSync(registryId: string, authority: Authority): Promise<void> {
+  return oneAtATime(registryId, () => resume(registryId, authority));
+}
+
+async function resume(registryId: string, authority: Authority): Promise<void> {
   if (!deviceSyncAvailable()) return;
   await waitForDeviceSyncHydration();
   const accountName = accountDeviceSync(registryId).androidAccountName ?? (await androidAccountOf(registryId))?.name;
@@ -285,11 +311,15 @@ function withoutAuthorityStates(entry: AccountDeviceSync, authority: Authority):
  * how many changes are waiting: call again with `force` once the user agreed
  * to lose them, or `resumeDeviceSync` to keep syncing.
  */
-export async function disableDeviceSync(
+export function disableDeviceSync(
   registryId: string,
   authority: Authority,
   options: { force?: boolean } = {},
 ): Promise<TurnOffResult> {
+  return oneAtATime(registryId, () => disable(registryId, authority, options));
+}
+
+async function disable(registryId: string, authority: Authority, options: { force?: boolean }): Promise<TurnOffResult> {
   if (!deviceSyncAvailable()) return { done: true, pending: 0 };
   await waitForDeviceSyncHydration();
   const store = useDeviceSyncStore.getState();
