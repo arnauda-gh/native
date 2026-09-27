@@ -1,6 +1,10 @@
 package com.anonymous.bulwarkmobile
 
 import android.app.Application
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.util.Log
 import androidx.annotation.MainThread
 import com.facebook.react.ReactApplication
 import com.facebook.react.ReactInstanceEventListener
@@ -19,6 +23,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  * sync adapters.
  */
 object HeadlessJs {
+    private const val TAG = "HeadlessJs"
+
+    /** No caller waits longer for React Native: JobScheduler stops sync and push jobs after 10 minutes. */
+    private const val MAX_WAIT_MS = 600_000L
+    private const val WATCH_MS = 1_000L
+
     /**
      * Calls [onReady] once with a React context whose JS instance is up,
      * starting React Native if the process was woken for this work.
@@ -29,6 +39,13 @@ object HeadlessJs {
      * pushes arrived while the app was starting. So the listener goes in
      * first and the ready check after it; whichever sees the ready instance
      * first runs the task.
+     *
+     * The wait ends once, and its listener goes with it: with a ready context,
+     * or without one when React fails to start (the start task faults) or
+     * after [MAX_WAIT_MS], when no caller can still be waiting. A context that
+     * comes up later runs nothing of it, so waits given up on don't pile up on
+     * the host with everything their [onReady] holds. (A caller that gives up
+     * sooner, like the sync adapter at its deadline, checks that in [onReady].)
      *
      * Call it on the main thread; [onReady] runs there too. MainApplication
      * creates the ReactHost on first use without a lock (ExpoReactHostFactory),
@@ -41,43 +58,66 @@ object HeadlessJs {
      */
     @MainThread
     fun withReadyReactContext(app: Application, onReady: (ReactContext) -> Unit): TaskInterface<Void>? {
-        val done = AtomicBoolean(false)
-        val runOnce = { context: ReactContext -> if (done.compareAndSet(false, true)) onReady(context) }
         val reactApp = app as ReactApplication
         if (ReactNativeNewArchitectureFeatureFlags.enableBridgelessArchitecture()) {
             val host = checkNotNull(reactApp.reactHost) { "ReactHost is not initialized in New Architecture" }
-            val listener = object : ReactInstanceEventListener {
-                override fun onReactContextInitialized(context: ReactContext) {
-                    host.removeReactInstanceEventListener(this)
-                    runOnce(context)
-                }
-            }
-            host.addReactInstanceEventListener(listener)
+            val wait = ContextWait(onReady) { host.removeReactInstanceEventListener(it) }
+            host.addReactInstanceEventListener(wait)
             val current = host.currentReactContext
             if (current != null && current.hasActiveReactInstance()) {
-                host.removeReactInstanceEventListener(listener)
-                runOnce(current)
+                wait.onReactContextInitialized(current)
                 return null
             }
-            return host.start()
+            return host.start().also { wait.watch(it) }
         }
         @Suppress("DEPRECATION")
         val manager = reactApp.reactNativeHost.reactInstanceManager
-        val listener = object : ReactInstanceEventListener {
-            override fun onReactContextInitialized(context: ReactContext) {
-                manager.removeReactInstanceEventListener(this)
-                runOnce(context)
-            }
-        }
-        manager.addReactInstanceEventListener(listener)
+        val wait = ContextWait(onReady) { manager.removeReactInstanceEventListener(it) }
+        manager.addReactInstanceEventListener(wait)
         val current = manager.currentReactContext
         if (current != null && current.hasActiveReactInstance()) {
-            manager.removeReactInstanceEventListener(listener)
-            runOnce(current)
-        } else if (!manager.hasStartedCreatingInitialContext()) {
-            manager.createReactContextInBackground()
+            wait.onReactContextInitialized(current)
+            return null
         }
+        if (!manager.hasStartedCreatingInitialContext()) manager.createReactContextInBackground()
+        wait.watch(null)
         return null
+    }
+
+    /** One caller's wait for a ready context: a listener on the host that ends once and then removes itself. */
+    private class ContextWait(
+        private val onReady: (ReactContext) -> Unit,
+        private val removeListener: (ReactInstanceEventListener) -> Unit,
+    ) : ReactInstanceEventListener {
+        private val ended = AtomicBoolean(false)
+
+        override fun onReactContextInitialized(context: ReactContext) {
+            if (end()) onReady(context)
+        }
+
+        /** Ends the wait without a context once [boot] faulted or [MAX_WAIT_MS] passed; checked on the main thread. */
+        fun watch(boot: TaskInterface<Void>?) {
+            val main = Handler(Looper.getMainLooper())
+            val giveUpAt = SystemClock.elapsedRealtime() + MAX_WAIT_MS
+            main.postDelayed(object : Runnable {
+                override fun run() {
+                    if (ended.get()) return
+                    val faulted = boot?.isFaulted() == true
+                    if (!faulted && SystemClock.elapsedRealtime() < giveUpAt) {
+                        main.postDelayed(this, WATCH_MS)
+                    } else if (end()) {
+                        val why = if (faulted) "React Native did not start" else "no React context after $MAX_WAIT_MS ms"
+                        Log.w(TAG, "$why; no longer waiting")
+                    }
+                }
+            }, WATCH_MS)
+        }
+
+        private fun end(): Boolean {
+            if (!ended.compareAndSet(false, true)) return false
+            removeListener(this)
+            return true
+        }
     }
 
     /**
