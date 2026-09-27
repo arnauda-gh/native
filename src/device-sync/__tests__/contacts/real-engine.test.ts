@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { Data, Groups, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
-import { addServerCards, ANDROID_ACCOUNT, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
+import { addServerCards, ANDROID_ACCOUNT, CONTACTS_AUTHORITY, createHarness, renameDeviceContact, rowWrites, type Harness } from '../engine/harness';
 import type { SetTarget } from '../fakes/fake-jmap-server';
 import { JPEG } from './fixtures';
 
@@ -99,6 +99,22 @@ describe('contacts through the engine', () => {
     expect(h.server.get('ContactCard', 'a', team)?.members).toEqual({ other: true });
     // Turning sync off finds nothing waiting.
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
+  it('puts back an edit of a card that is only in a read-only book, without asking the server', async () => {
+    const h = real();
+    const shared = h.server.addAddressBook('a', { name: 'Shared', myRights: { mayRead: true, mayWrite: false, mayShare: false, mayDelete: false } });
+    h.prefs.contactsSelection[`a/${shared}`] = true;
+    const [ada] = addServerCards(h, ['Ada Lovelace'], 'a', shared);
+    expect((await h.run()).outcome).toBe('ok');
+
+    renameDeviceContact(h, h.contactNamed('Ada Lovelace')!.id, 'Ada King');
+    const report = await h.run();
+
+    expect(report).toMatchObject({ outcome: 'ok', stats: { skipped: 1, uploaded: { updated: 0 } } });
+    expect(report.itemErrors).toEqual([expect.objectContaining({ side: 'upload', type: 'readOnly' })]);
+    expect(h.contactNamed('Ada Lovelace')).toMatchObject({ dirty: false });
+    expect(h.server.get('ContactCard', 'a', ada)).toMatchObject({ name: { full: 'Ada Lovelace' } });
   });
 
   it('puts a contact created on the device into the group it was added to', async () => {

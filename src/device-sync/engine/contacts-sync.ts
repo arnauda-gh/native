@@ -265,8 +265,7 @@ export class ContactsSync extends ItemSync {
     for (const group of await this.loadGroupsWhere()) {
       if (!group.sourceId || group.deleted) continue;
       this.groupRows.set(group.sourceId, group.groupId);
-      const keys = this.cardKeys(accountOfRef(group.sourceId), group.shadow);
-      if (keys.length > 0 && keys.every((k) => this.book(k)?.myRights?.mayWrite === false)) this.readOnlyGroups.add(group.sourceId);
+      if (this.inReadOnlyBooksOnly(accountOfRef(group.sourceId), group.shadow)) this.readOnlyGroups.add(group.sourceId);
       for (const uid of onIds(group.shadow?.members as Record<string, boolean> | undefined)) {
         let set = this.membership.get(uid);
         if (!set) this.membership.set(uid, (set = new Set()));
@@ -291,6 +290,12 @@ export class ContactsSync extends ItemSync {
   private writable(key: string): boolean {
     const book = this.book(key);
     return !!book && book.myRights?.mayWrite !== false;
+  }
+
+  /** Whether the card is in address books, and only in ones that take no writes. */
+  private inReadOnlyBooksOnly(acct: string | null, card: Pick<ContactCardWire, 'addressBookIds'> | null | undefined): boolean {
+    const keys = this.cardKeys(acct, card);
+    return keys.length > 0 && keys.every((k) => this.book(k)?.myRights?.mayWrite === false);
   }
 
   protected collectionGone(key: string): boolean {
@@ -373,10 +378,7 @@ export class ContactsSync extends ItemSync {
       mintKey: (taken) => env.mintKey(taken),
       mintUid: () => env.mintUid(),
       selectedCollections: (card) => this.cardKeys(acct, card).filter((k) => this.syncedKeys.has(k)),
-      isReadOnly: (card) => {
-        const keys = this.cardKeys(acct, card);
-        return keys.length > 0 && keys.every((k) => this.book(k)?.myRights?.mayWrite === false);
-      },
+      isReadOnly: (card) => this.inReadOnlyBooksOnly(acct, card),
       isSelected: (key) => this.syncedKeys.has(key),
       createTarget: () => this.createTarget(),
       photoBytes: (entry) => this.photoBytes(entry),
