@@ -23,6 +23,8 @@ private class FakeLookup(private val me: AccountRef = ME) : ScopeLookup {
     val colors = HashMap<Long, AccountRef>()
     /** data id → raw contact */
     val data = HashMap<Long, Long>()
+    /** data id → mimetype */
+    val mimetypes = HashMap<Long, String>()
     /** event id → calendar */
     val events = HashMap<Long, Long>()
     /** child table → child id → event */
@@ -41,6 +43,8 @@ private class FakeLookup(private val me: AccountRef = ME) : ScopeLookup {
     }.filterKeys { it in ids }
 
     override fun dataRawContacts(ids: Set<Long>) = data.filterKeys { it in ids }
+
+    override fun dataMimetypes(ids: Set<Long>) = mimetypes.filterKeys { it in ids }
 
     override fun eventCalendars(ids: Set<Long>) = events.filterKeys { it in ids }
 
@@ -304,6 +308,49 @@ class ProviderOpsTest {
         }
         // data1 of other kinds is plain data.
         plan(CONTACTS, """{"op":"insert","table":"data","values":{"raw_contact_id":1,"mimetype":"x","data1":11}}""")
+    }
+
+    @Test
+    fun `a membership row's group is checked on updates by id too`() {
+        lookup.mimetypes[100] = GROUP_MEMBERSHIP_MIMETYPE
+        plan(CONTACTS, """{"op":"update","table":"data","id":100,"values":{"data1":10}}""")
+        refused(BatchFailure.SCOPE) { plan(CONTACTS, """{"op":"update","table":"data","id":100,"values":{"data1":11}}""") }
+        refused(BatchFailure.ASSERT) { plan(CONTACTS, """{"op":"update","table":"data","id":100,"values":{"data1":12}}""") }
+        // data1 by a selection could reach memberships the lookup never saw.
+        refused(BatchFailure.SCOPE) {
+            plan(CONTACTS, """{"op":"update","table":"data","where":"raw_contact_id = ?","args":[1],"values":{"data1":11}}""")
+        }
+        // data1 of other kinds is plain data.
+        lookup.mimetypes[100] = "vnd.android.cursor.item/phone_v2"
+        plan(CONTACTS, """{"op":"update","table":"data","id":100,"values":{"data1":11}}""")
+    }
+
+    @Test
+    fun `photo file ids are never written`() {
+        val photo = """"raw_contact_id":1,"mimetype":"vnd.android.cursor.item/photo""""
+        plan(CONTACTS, """{"op":"insert","table":"data","values":{$photo,"data14":null,"data15":{"b64":"AAAA"}}}""")
+        refused(BatchFailure.SCOPE) { plan(CONTACTS, """{"op":"insert","table":"data","values":{$photo,"data14":5}}""") }
+        refused(BatchFailure.SCOPE) { plan(CONTACTS, """{"op":"update","table":"data","id":100,"values":{"data14":5}}""") }
+    }
+
+    @Test
+    fun `a selection can't close the scope's parentheses or query elsewhere`() {
+        for (where in listOf("1) OR (1", "dirty = 1) OR (1 = 1", "(1", "1; DELETE FROM events", "1 -- x", "1 /* x */",
+            "_id IN (SELECT _id FROM events)", "1 UNION ALL x", "title = 'open")) {
+            val quoted = JSONObject.quote(where)
+            refused(BatchFailure.SCOPE) { plan(CALENDAR, """{"op":"update","table":"events","where":$quoted,"values":{"dirty":1}}""") }
+            refused(BatchFailure.SCOPE) { plan(CALENDAR, """{"op":"delete","table":"attendees","where":$quoted}""") }
+            refused(BatchFailure.SCOPE) {
+                ProviderOpParser.parseQuery(CALENDAR, """{"table":"attendees","columns":["_id"],"where":$quoted}""")
+            }
+        }
+        refused(BatchFailure.SCOPE) {
+            ProviderOpParser.parseQuery(CONTACTS, """{"table":"raw_contacts","columns":["_id"],"orderBy":"_id); DROP TABLE x; --"}""")
+        }
+        // Parentheses and keywords inside quoted literals are data.
+        plan(CALENDAR, """{"op":"update","table":"events","where":"title = '(x' OR title = 'select'","values":{"dirty":1}}""")
+        plan(CALENDAR, """{"op":"assert","table":"events","where":"(dirty = 1 OR deleted = 1) AND _sync_id LIKE '~pending/%'","expectCount":0}""")
+        ProviderOpParser.parseQuery(CONTACTS, """{"table":"raw_contacts","columns":["_id"],"orderBy":"_id DESC"}""")
     }
 
     @Test

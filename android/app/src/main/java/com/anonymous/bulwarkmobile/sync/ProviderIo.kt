@@ -199,6 +199,14 @@ class ProviderIo(context: Context, accountName: String, private val authority: S
     override fun dataRawContacts(ids: Set<Long>): Map<Long, Long> =
         idPairs(ProviderTable.DATA, "raw_contact_id", ids)
 
+    override fun dataMimetypes(ids: Set<Long>): Map<Long, String> {
+        val mimetypes = HashMap<Long, String>()
+        forEachRow(ProviderTable.DATA, arrayOf(ID, "mimetype"), ID, ids) { c ->
+            if (!c.isNull(1)) mimetypes[c.getLong(0)] = c.getString(1)
+        }
+        return mimetypes
+    }
+
     override fun eventCalendars(ids: Set<Long>): Map<Long, Long> =
         idPairs(ProviderTable.EVENTS, "calendar_id", ids)
 

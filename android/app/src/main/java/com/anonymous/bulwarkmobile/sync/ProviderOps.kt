@@ -159,6 +159,61 @@ sealed interface ProviderOp {
 const val GROUP_MEMBERSHIP_MIMETYPE = "vnd.android.cursor.item/group_membership"
 
 /**
+ * Checks a selection or sort order before the account's scope is ANDed onto
+ * it as `(text) AND (scope)`: its parentheses must balance outside quoted
+ * literals, or `1) OR (1` would close the scope's own parenthesis. It may
+ * not end or comment out the statement, nor query other tables. The engine's
+ * selections are constants with `?` arguments; this guards against bugs.
+ */
+object SqlFragments {
+    private val FORBIDDEN_WORDS = Regex("\\b(SELECT|UNION|ATTACH|DETACH|PRAGMA)\\b", RegexOption.IGNORE_CASE)
+
+    fun check(text: String, what: String) {
+        var depth = 0
+        var quote: Char? = null
+        val outside = StringBuilder(text.length)
+        var i = 0
+        while (i < text.length) {
+            val c = text[i]
+            if (quote != null) {
+                if (c == quote) {
+                    // A doubled quote is an escaped one inside the literal.
+                    if (i + 1 < text.length && text[i + 1] == quote) i++ else quote = null
+                }
+                outside.append(' ')
+            } else {
+                when (c) {
+                    '\'', '"' -> {
+                        quote = c
+                        outside.append(' ')
+                    }
+                    '(' -> {
+                        depth++
+                        outside.append(c)
+                    }
+                    ')' -> {
+                        if (--depth < 0) refuse(what, "closes a parenthesis it did not open")
+                        outside.append(c)
+                    }
+                    ';' -> refuse(what, "ends the statement")
+                    '\u0000' -> refuse(what, "contains a NUL character")
+                    else -> outside.append(c)
+                }
+            }
+            i++
+        }
+        if (quote != null) refuse(what, "leaves a quote open")
+        if (depth != 0) refuse(what, "leaves a parenthesis open")
+        val bare = outside.toString()
+        if ("--" in bare || "/*" in bare) refuse(what, "contains a comment")
+        FORBIDDEN_WORDS.find(bare)?.let { refuse(what, "uses ${it.value.uppercase()}") }
+    }
+
+    private fun refuse(what: String, why: String): Nothing =
+        throw ProviderRefusal(BatchFailure.SCOPE, "$what $why")
+}
+
+/**
  * The table a written column points into when the row it names must belong to
  * the account as well: the parent of a row, the master of an exception event,
  * the group of a membership row.
@@ -191,7 +246,8 @@ object ProviderOpParser {
         }
         if (columns.isEmpty()) throw invalid("query needs at least one column")
         val (where, args) = o.whereArgs("query")
-        return ProviderQuery(table, columns, where, args, o.optionalString("orderBy"))
+        val orderBy = o.optionalString("orderBy")?.also { SqlFragments.check(it, "query: orderBy") }
+        return ProviderQuery(table, columns, where, args, orderBy)
     }
 
     fun parseBatch(authority: String, json: String): List<ProviderOp> {
@@ -323,7 +379,7 @@ object ProviderOpParser {
     }
 
     private fun JSONObject.whereArgs(where: String): Pair<String?, List<String>> {
-        val sql = optionalString("where")
+        val sql = optionalString("where")?.also { SqlFragments.check(it, "$where: where") }
         val args = when (val raw = opt("args")) {
             null, JSONObject.NULL -> emptyList()
             is JSONArray -> (0 until raw.length()).map { i ->

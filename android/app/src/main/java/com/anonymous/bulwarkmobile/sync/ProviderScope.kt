@@ -45,21 +45,45 @@ class ScopePlanner(private val account: AccountRef, private val lookup: ScopeLoo
     }
 
     fun planBatch(ops: List<ProviderOp>): List<PlannedOp> {
-        val owners = Owners(ownershipRequests(ops))
-        return ops.mapIndexed { i, op -> plan(i, op, owners) }
+        val memberships = membershipUpdates(ops)
+        val owners = Owners(ownershipRequests(ops, memberships))
+        return ops.mapIndexed { i, op -> plan(i, op, owners, memberships) }
     }
 
-    private fun plan(i: Int, op: ProviderOp, owners: Owners): PlannedOp = when (op) {
+    /**
+     * Membership rows among the data rows that updates by id write `data1`
+     * of without restating the mimetype: their `data1` names a group, which
+     * must be the account's like on insert.
+     */
+    private fun membershipUpdates(ops: List<ProviderOp>): Set<Long> {
+        val ids = ops.asSequence()
+            .filterIsInstance<ProviderOp.Update>()
+            .filter { it.table == ProviderTable.DATA && writesUntypedData1(it.values) }
+            .mapNotNull { it.target.id }
+            .toSet()
+        if (ids.isEmpty()) return emptySet()
+        return lookup.dataMimetypes(ids).filterValues { it == GROUP_MEMBERSHIP_MIMETYPE }.keys
+    }
+
+    private fun writesUntypedData1(values: Map<String, Cell>) =
+        MIMETYPE !in values && (values[DATA1] ?: Cell.Null) != Cell.Null
+
+    private fun plan(i: Int, op: ProviderOp, owners: Owners, memberships: Set<Long>): PlannedOp = when (op) {
         is ProviderOp.SetSyncState -> PlannedOp.SetSyncState(op.value)
         is ProviderOp.Insert -> {
             checkAccountColumns(i, op.table, op.values)
+            checkPhotoFile(i, op.table, op.values)
             checkReferences(i, op.table, op.values - op.refs.keys, owners)
             val values = if (op.table.scope == TableScope.ACCOUNT_COLUMNS) op.values + accountCells() else op.values
             PlannedOp.Insert(op.table, values, op.refs, op.yieldAllowed)
         }
         is ProviderOp.Update -> {
             checkAccountColumns(i, op.table, op.values)
+            checkPhotoFile(i, op.table, op.values)
             checkReferences(i, op.table, op.values, owners)
+            if (op.table == ProviderTable.DATA && writesUntypedData1(op.values)) {
+                checkMembershipUpdate(i, op, owners, memberships)
+            }
             checkTarget(i, op.table, op.target, owners)
             if (op.table == ProviderTable.EXTENDED_PROPERTIES) {
                 // CalendarProvider updates extended properties only through
@@ -146,6 +170,35 @@ class ScopePlanner(private val account: AccountRef, private val lookup: ScopeLoo
         }
     }
 
+    /**
+     * `data1` written by an update that doesn't restate the mimetype: on a
+     * membership row it names a group. Rows chosen by a selection could be
+     * memberships the lookup didn't see, so only updates by id may do it.
+     */
+    private fun checkMembershipUpdate(i: Int, op: ProviderOp.Update, owners: Owners, memberships: Set<Long>) {
+        val id = op.target.id
+            ?: throw ProviderRefusal(BatchFailure.SCOPE, "op $i: data1 may only be written to a data row by id")
+        if (id !in memberships) return
+        val group = op.values[DATA1]?.rowId()
+            ?: throw ProviderRefusal(BatchFailure.PROVIDER, "op $i: a membership's data1 must be a group id")
+        when (owners.of(ProviderTable.GROUPS, group)) {
+            Owner.OURS -> Unit
+            Owner.FOREIGN -> throw ProviderRefusal(BatchFailure.SCOPE, "op $i: data.data1 names group $group of another account")
+            Owner.MISSING -> throw ProviderRefusal(BatchFailure.ASSERT, "op $i: data.data1 names group $group, which no longer exists")
+        }
+    }
+
+    /**
+     * A photo row's file id (`data14`) is the provider's: it points into the
+     * photo store, where another account's file id would let `readPhoto`
+     * read that account's photo. Photos are written as bytes (`data15`).
+     */
+    private fun checkPhotoFile(i: Int, table: ProviderTable, values: Map<String, Cell>) {
+        if (table == ProviderTable.DATA && (values[DATA14] ?: Cell.Null) != Cell.Null) {
+            throw ProviderRefusal(BatchFailure.SCOPE, "op $i: data.data14 (a photo file id) is written by the provider only")
+        }
+    }
+
     /** A row named by id must not belong to another account; a missing one fails on the expected count instead. */
     private fun checkTarget(i: Int, table: ProviderTable, target: RowTarget, owners: Owners) {
         val id = target.id ?: return
@@ -192,7 +245,7 @@ class ScopePlanner(private val account: AccountRef, private val lookup: ScopeLoo
     }
 
     /** Every row id the batch names, by table: op targets and referenced rows. */
-    private fun ownershipRequests(ops: List<ProviderOp>): Map<ProviderTable, Set<Long>> {
+    private fun ownershipRequests(ops: List<ProviderOp>, memberships: Set<Long>): Map<ProviderTable, Set<Long>> {
         val requests = HashMap<ProviderTable, MutableSet<Long>>()
         fun request(table: ProviderTable, id: Long) {
             requests.getOrPut(table) { HashSet() } += id
@@ -209,6 +262,7 @@ class ScopePlanner(private val account: AccountRef, private val lookup: ScopeLoo
                 is ProviderOp.Update -> {
                     requestReferences(op.table, op.values)
                     op.target.id?.let { request(op.table, it) }
+                    if (op.target.id in memberships) op.values[DATA1]?.rowId()?.let { request(ProviderTable.GROUPS, it) }
                 }
                 is ProviderOp.Delete -> op.target.id?.let { request(op.table, it) }
                 is ProviderOp.Assert -> op.target.id?.let { request(op.table, it) }
@@ -275,6 +329,9 @@ class ScopePlanner(private val account: AccountRef, private val lookup: ScopeLoo
         const val ACCOUNT_NAME = "account_name"
         const val ACCOUNT_TYPE = "account_type"
         const val DATA_SET = "data_set"
+        private const val MIMETYPE = "mimetype"
+        private const val DATA1 = "data1"
+        private const val DATA14 = "data14"
 
         /** Ids per `IN (…)` list: a few KB of selection, far from SQLite's and Binder's limits. */
         const val ID_LIST_CHUNK = 500
@@ -306,6 +363,9 @@ interface ScopeLookup {
 
     /** The raw contact of each data row that exists. */
     fun dataRawContacts(ids: Set<Long>): Map<Long, Long>
+
+    /** The mimetype of each data row that exists. */
+    fun dataMimetypes(ids: Set<Long>): Map<Long, String>
 
     /** The calendar of each event that exists. */
     fun eventCalendars(ids: Set<Long>): Map<Long, Long>
