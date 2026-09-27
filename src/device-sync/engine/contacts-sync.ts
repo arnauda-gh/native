@@ -151,7 +151,8 @@ export class ContactsSync extends ItemSync {
         deleted: c.deleted,
         isNew: !c.sourceId,
         poison: c.poison,
-        collections: c.collections,
+        // The card's books as last seen: SYNC1 lists only the selected ones, none for a card that left them all.
+        collections: c.shadow ? this.cardKeys(accountOfRef(c.sourceId), c.shadow) : c.collections,
       }),
       fingerprint: (c) =>
         poisonFingerprint({

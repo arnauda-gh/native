@@ -155,6 +155,90 @@ describe('device sync engine with the real planners', () => {
     expect(h.contacts().every((c) => !c.dirty)).toBe(true);
   });
 
+  describe('a device edit of an object the server moved out of every synced collection', () => {
+    /** Ada with two numbers in the synced book; the device deletes the second in place (AOSP). */
+    async function adaWithDeletedNumber() {
+      const h = real();
+      const archive = h.server.addAddressBook('a', { name: 'Archive' });
+      h.prefs.contactsSelection[`a/${archive}`] = false;
+      const ada = h.server.addCard('a', {
+        uid: 'ada-uid',
+        name: { full: 'Ada Lovelace' },
+        phones: { p1: { '@type': 'Phone', number: '+1 111' }, p2: { '@type': 'Phone', number: '+1 222' } },
+        addressBookIds: { [h.book]: true },
+      });
+      await h.run();
+      const contact = h.contactNamed('Ada Lovelace')!;
+      const p2 = h.device.rows('data').find((d) => Number(d.raw_contact_id) === contact.id && d[Data.DATA1] === '+1 222')!;
+      h.device.user.deleteData(Number(p2._id));
+      // Meanwhile another client files Ada in Archive only and adds a number.
+      h.server.serverUpdate('ContactCard', 'a', ada, { addressBookIds: { [archive]: true }, 'phones/p3': { '@type': 'Phone', number: '+1 333' } });
+      return { h, ada, archive };
+    }
+
+    const numbers = (card: Record<string, unknown>) =>
+      Object.values((card.phones ?? {}) as Record<string, { number: string }>).map((p) => p.number).sort();
+
+    it('uploads it against the server version, then drops the rows', async () => {
+      const { h, ada, archive } = await adaWithDeletedNumber();
+
+      const report = await h.run();
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+      const card = h.server.get('ContactCard', 'a', ada)!;
+      expect(numbers(card)).toEqual(['+1 111', '+1 333']);
+      expect(card.addressBookIds).toEqual({ [archive]: true });
+      expect(h.contacts()).toEqual([]);
+    });
+
+    it('does the same when a full reconcile finds the object outside', async () => {
+      const { h, ada, archive } = await adaWithDeletedNumber();
+      h.server.truncateChangeLog('a', 'contacts');
+
+      const report = await h.run();
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [] });
+      const card = h.server.get('ContactCard', 'a', ada)!;
+      expect(numbers(card)).toEqual(['+1 111', '+1 333']);
+      expect(card.addressBookIds).toEqual({ [archive]: true });
+      expect(h.contacts()).toEqual([]);
+    });
+
+    it('never uploads an event edit against an outdated shadow', async () => {
+      const h = real();
+      const archive = h.server.addCalendar('a', { name: 'Archive' });
+      h.prefs.calendarSelection[`a/${archive}`] = false;
+      const series = h.server.addEvent('a', {
+        uid: 'series-uid',
+        title: 'Standup',
+        start: '2026-09-28T09:00:00',
+        duration: 'PT15M',
+        timeZone: 'Europe/Berlin',
+        recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+        recurrenceOverrides: { '2026-09-29T09:00:00': { title: 'Planning' } },
+        calendarIds: { [h.calendar]: true },
+      });
+      await h.run(CALENDAR_AUTHORITY);
+      const master = h.events().find((e) => e._sync_id === `a/${series}`)!;
+      const later = Number(master[Events.DTSTART]) + 3_600_000;
+      // The device moves the series by an hour; another client files it in Archive and changes another instance.
+      h.device.user.updateEvent(Number(master._id), { [Events.DTSTART]: later });
+      h.server.serverUpdate('CalendarEvent', 'a', series, {
+        calendarIds: { [archive]: true },
+        'recurrenceOverrides/2026-10-01T09:00:00': { title: 'Retro' },
+      });
+
+      expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('ok');
+
+      const event = h.server.get('CalendarEvent', 'a', series)!;
+      const titles = Object.values((event.recurrenceOverrides ?? {}) as Record<string, { title?: string }>).map((o) => o.title).sort();
+      expect(titles).toEqual(['Planning', 'Retro']);
+      // The move went up, or it still waits on the device: it is not lost.
+      const row = h.events().find((e) => Number(e._id) === Number(master._id));
+      expect(event.start === '2026-09-28T10:00:00' || (Number(row?.dirty) === 1 && Number(row?.[Events.DTSTART]) === later)).toBe(true);
+    });
+  });
+
   it('creates a device event that carries the uid of a synced event (an app copied it) under a fresh uid', async () => {
     const h = real();
     const standup = h.server.addEvent('a', {

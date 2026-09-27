@@ -408,14 +408,16 @@ export abstract class ItemSync {
       if (flags.dirty || flags.deleted) verify.push(id);
       else gone.add(id);
     }
+    const outside: string[] = [];
     if (verify.length) {
-      // Destroyed, or moved out of the synced collections? Only a destroy takes dirty rows.
+      // Destroyed, or moved out of the synced collections? Only a destroy takes dirty rows; the
+      // others are downloaded like any change, so a dirty item merges the server's version.
       const { list, notFound } = await this.env.jmap.get<ServerObject>(this.itemType, acct, verify, ['id']);
       for (const id of notFound) gone.add(id);
-      for (const object of list) this.outsideOf(acct).add(refOf(acct, object.id));
+      for (const object of list) outside.push(object.id);
     }
     const selected = collections.map((c) => collectionKey(acct, c));
-    await this.processIds(acct, [], [...gone], (next) => {
+    await this.processIds(acct, outside, [...gone], (next) => {
       const account = accountOf(next, acct);
       account.itemsState = from;
       account.reconcile = null;
@@ -555,7 +557,14 @@ export abstract class ItemSync {
     written: Map<Kind, Set<string>> | null,
   ): Work | null {
     if (!kind || !this.inSelection(acct, object)) {
-      return found ? this.removeWork(acct, object.id, found, 'outside') : null;
+      if (!found) return null;
+      const meta = found.kind.meta(found.local);
+      if (found.kind === kind && meta.dirty && !meta.deleted && !meta.isNew) {
+        // Uploaded first, dropped afterwards: merged like any dirty item, so the upload builds on the server's version.
+        this.outsideOf(acct).add(refOf(acct, object.id));
+        return this.downloadWork(kind, acct, object, found.local, written);
+      }
+      return this.removeWork(acct, object.id, found, 'outside');
     }
     if (found && found.kind !== kind) {
       const meta = found.kind.meta(found.local);
@@ -1263,6 +1272,8 @@ export abstract class ItemSync {
     const counted = () => {
       if (created) this.env.report.stats.uploaded.created++;
       else this.env.report.stats.uploaded.updated++;
+      // In no synced collection any more (moved away on the server): the rows go after the upload.
+      if (!this.inSelection(acct, server)) this.outsideOf(acct).add(refOf(acct, server.id));
       this.onAccepted(kind, acct, server);
     };
     const failed = (reason: string, message: string) => {
