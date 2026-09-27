@@ -43,10 +43,21 @@ const { CREATED } = vi.hoisted(() => ({
 }));
 
 // A client of another signed-in account (device sync patches its push types
-// without the singleton).
-const { DETACHED } = vi.hoisted(() => ({
-  DETACHED: { loaded: true, types: ['EmailDelivery'] as string[], log: [] as unknown[] },
-}));
+// without the singleton), on a server with contacts and calendars unless a
+// test says otherwise.
+const { DETACHED, SYNC_SESSION } = vi.hoisted(() => {
+  const SYNC_SESSION = {
+    capabilities: {
+      'urn:ietf:params:jmap:core': {},
+      'urn:ietf:params:jmap:contacts': {},
+      'urn:ietf:params:jmap:calendars': {},
+    } as Record<string, unknown>,
+  };
+  return {
+    SYNC_SESSION,
+    DETACHED: { loaded: true, types: ['EmailDelivery'] as string[], log: [] as unknown[], session: SYNC_SESSION },
+  };
+});
 
 vi.mock('../../api/jmap-client', () => ({
   jmapClient: {
@@ -56,6 +67,9 @@ vi.mock('../../api/jmap-client', () => ({
     currentSession: { capabilities: { 'urn:ietf:params:jmap:core': {} } },
   },
   JMAPClient: class {
+    get currentSession() {
+      return DETACHED.session;
+    }
     async loadAccount(id: string) {
       DETACHED.log.push(['load', id]);
       return DETACHED.loaded;
@@ -112,7 +126,7 @@ import {
 } from '../../api/push';
 import { getSharedMailboxes } from '../../api/email';
 import { JMAPMethodError } from '../../api/jmap-result';
-import type { EmailPushConfig } from '../../api/types';
+import type { EmailPushConfig, JMAPSession } from '../../api/types';
 import { jmapClient } from '../../api/jmap-client';
 import { NativeModules } from 'react-native';
 import { generateAccountId } from '../account-utils';
@@ -394,26 +408,103 @@ describe('push types for device sync (#34)', () => {
     }));
   }
 
+  // A server that does not know a type refuses the whole write.
+  const refusedTypes = (types: string[] | undefined) => {
+    const unknown = (types ?? []).filter((type) => type !== 'EmailDelivery');
+    if (unknown.length > 0) throw new JMAPMethodError('invalidProperties', `Unknown types: ${unknown.join(', ')}`);
+  };
+
   beforeEach(async () => {
     vi.clearAllMocks();
     await AsyncStorage.clear();
     await AsyncStorage.setItem(deviceClientIdKey(ACCOUNT_ID), OUR_DCID);
-    (jmapClient as { currentSession: unknown }).currentSession = {
-      capabilities: { 'urn:ietf:params:jmap:core': {} },
-    };
+    (jmapClient as { currentSession: unknown }).currentSession = SYNC_SESSION;
+    DETACHED.session = SYNC_SESSION;
     listMock.mockResolvedValue([]);
     updateMock.mockResolvedValue(true);
     installFetch({});
   });
 
+  afterEach(() => {
+    (jmapClient as { currentSession: unknown }).currentSession = {
+      capabilities: { 'urn:ietf:params:jmap:core': {} },
+    };
+    DETACHED.session = SYNC_SESSION;
+    createMock.mockImplementation(async () => CREATED);
+    updateMock.mockImplementation(async () => undefined);
+  });
+
   it('adds the contact and calendar types of what the account syncs to the device', async () => {
-    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery']);
+    expect(await pushTypesFor(ACCOUNT_ID, SYNC_SESSION as unknown as JMAPSession)).toEqual(['EmailDelivery']);
     await syncing({ [CONTACTS]: true, [CALENDAR]: false });
-    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery', 'ContactCard', 'AddressBook']);
-    expect(await pushTypesFor('someone@else.example')).toEqual(['EmailDelivery']);
+    expect(await pushTypesFor(ACCOUNT_ID, SYNC_SESSION as unknown as JMAPSession))
+      .toEqual(['EmailDelivery', 'ContactCard', 'AddressBook']);
+    expect(await pushTypesFor('someone@else.example', SYNC_SESSION as unknown as JMAPSession)).toEqual(['EmailDelivery']);
     // Removed in Android Settings: nothing to route any more.
     await syncing({ [CONTACTS]: true }, { removedInAndroidSettings: true });
-    expect(await pushTypesFor(ACCOUNT_ID)).toEqual(['EmailDelivery']);
+    expect(await pushTypesFor(ACCOUNT_ID, SYNC_SESSION as unknown as JMAPSession)).toEqual(['EmailDelivery']);
+  });
+
+  it('adds only the types of what the server offers', async () => {
+    await syncing({ [CONTACTS]: true, [CALENDAR]: true });
+    const calendarsOnly = { capabilities: { 'urn:ietf:params:jmap:core': {}, 'urn:ietf:params:jmap:calendars': {} } };
+    expect(await pushTypesFor(ACCOUNT_ID, calendarsOnly as unknown as JMAPSession))
+      .toEqual(['EmailDelivery', 'CalendarEvent', 'Calendar']);
+    expect(await pushTypesFor(ACCOUNT_ID, null)).toEqual(['EmailDelivery']);
+
+    // Sync was turned on while another account's server was served; this one
+    // has neither: its subscription stays mail-only.
+    (jmapClient as { currentSession: unknown }).currentSession = {
+      capabilities: { 'urn:ietf:params:jmap:core': {} },
+    };
+    createMock.mockImplementation(async (params: { types: string[] }) => {
+      refusedTypes(params.types);
+      return CREATED;
+    });
+    const result = await setupPushNotifications({ relayBaseUrl: RELAY });
+    expect(result.subscriptionId).toBe('new-server-id');
+    expect(createMock.mock.calls.map((c) => c[0].types)).toEqual([['EmailDelivery']]);
+  });
+
+  it("does not add types another account's server does not offer", async () => {
+    const OTHER = 'bob@other.example.net';
+    await AsyncStorage.setItem(`push:subscriptionId:v2:${OTHER}`, 'bob-sub');
+    await AsyncStorage.setItem(DEVICE_SYNC_KEY, JSON.stringify({
+      state: { accounts: { [OTHER]: { enabled: { [CONTACTS]: true } } } },
+      version: 0,
+    }));
+    DETACHED.session = { capabilities: { 'urn:ietf:params:jmap:core': {}, 'urn:ietf:params:jmap:calendars': {} } };
+    DETACHED.log = [];
+    DETACHED.types = ['EmailDelivery'];
+    await refreshPushSubscriptionTypes(OTHER);
+    expect(DETACHED.log.map((entry) => (entry as unknown[])[0])).toEqual(['load', 'PushSubscription/get']);
+  });
+
+  it('keeps mail push on a server that refuses the device sync types', async () => {
+    await syncing({ [CONTACTS]: true });
+    createMock.mockImplementation(async (params: { types: string[] }) => {
+      refusedTypes(params.types);
+      return CREATED;
+    });
+    updateMock.mockImplementation(async (_id: string, patch: { types?: string[] }) => refusedTypes(patch.types));
+
+    // A new subscription: mail-only rather than none.
+    const created = await setupPushNotifications({ relayBaseUrl: RELAY });
+    expect(created).toEqual({ subscriptionId: 'new-server-id', verified: true });
+    expect(createMock.mock.calls.map((c) => c[0].types))
+      .toEqual([['EmailDelivery', 'ContactCard', 'AddressBook'], ['EmailDelivery']]);
+
+    // The working subscription is kept and its expiry pushed forward, never
+    // replaced by one the server refuses as well.
+    vi.clearAllMocks();
+    await AsyncStorage.setItem(SUB_KEY, 'existing');
+    listMock.mockResolvedValue([healthy(['EmailDelivery'])]);
+    const refreshed = await setupPushNotifications({ relayBaseUrl: RELAY });
+    expect(refreshed.subscriptionId).toBe('existing');
+    expect(updateMock.mock.calls.map((c) => c[1].types)).toEqual([['EmailDelivery', 'ContactCard', 'AddressBook'], undefined]);
+    expect(updateMock.mock.calls[1][1].expires).toBeDefined();
+    expect(createMock).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
   });
 
   it('subscribes with them', async () => {
