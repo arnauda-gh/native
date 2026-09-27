@@ -6,6 +6,7 @@
  */
 import { GroupMembership, Groups, RawContacts } from '../../android-columns';
 import { makeKeyMinter, parseObjectRef, uuidFrom } from '../../common/ids';
+import type { GroupRights } from '../../contacts/members';
 import { contactsPlanner } from '../../contacts/planner';
 import type {
   ContactCardWire,
@@ -48,7 +49,7 @@ export class Harness {
   readonly unselected = new Set<string>();
   /** When false the context has no `groupsOf` (memberships not synced). */
   groupIndex = true;
-  readonly ctx: ContactsContext;
+  readonly ctx: ContactsContext & GroupRights;
 
   constructor() {
     this.server.addAccount(JMAP, { name: ACCOUNT });
@@ -79,14 +80,20 @@ export class Harness {
           .filter((c) => c.kind === 'group' && (c.members as Record<string, boolean> | undefined)?.[uid] === true)
           .map((c) => `${JMAP}/${c.id as string}`);
       },
+      groupReadOnly(sourceId: string) {
+        const ref = parseObjectRef(sourceId);
+        const card = ref ? self.server.get('ContactCard', ref.accountId, ref.id) : undefined;
+        const books = Object.keys((card?.addressBookIds as Record<string, boolean> | undefined) ?? {});
+        return books.length > 0 && books.every((id) => self.readOnlyBooks.has(id));
+      },
     };
   }
 
   /** The context as the engine may build it without a group index. */
-  context(): ContactsContext {
+  context(): ContactsContext & GroupRights {
     if (this.groupIndex) return this.ctx;
     const { groupsOf: _drop, ...rest } = this.ctx;
-    return rest as ContactsContext;
+    return rest as ContactsContext & GroupRights;
   }
 
   async apply(group: OpGroup): Promise<BatchResult> {

@@ -14,13 +14,13 @@
  */
 import { Data, MimeType, RawContacts } from '../android-columns';
 import { canonicalJson } from '../common/json';
-import { objectRef } from '../common/ids';
+import { objectRef, parseCollectionKey, parseObjectRef } from '../common/ids';
 import type { ContactCardWire, ContactsContext, DownloadPlan, LocalContact, LocalDataRow } from '../planner';
 import type { ProviderOp, WriteRow } from '../types';
 import { changedFromBaseline, encodeBaseline, sameCell } from './cells';
 import { localChanges, sameUnit } from './diff';
 import { deletionsInferred, inPlaceEvidence, matchKind, reconcileKeys, type KindMatch } from './matching';
-import { planMemberships, remoteMemberships, shadowMemberOf, withMemberOf, withoutMemberOf } from './members';
+import { editableGroups, planMemberships, remoteMemberships, shadowMemberOf, withMemberOf, withoutMemberOf } from './members';
 import { assertContact, deleteData, insertUnit, updateData, updateRawContact, updateUnit } from './ops';
 import { shadowOf } from './photo';
 import { KIND_ORDER, projectCard, rowMatchesUnit, SPECS, type Unit } from './project';
@@ -224,10 +224,16 @@ export interface CleanWriteOptions {
   accepted?: boolean;
 }
 
+/** The JMAP account a local contact belongs to. */
+export function accountOf(local: LocalContact, ctx: Ctx): string {
+  return parseObjectRef(local.sourceId)?.accountId ?? parseCollectionKey(local.pending?.target)?.accountId ?? ctx.jmapAccountId;
+}
+
 /**
  * The ops that make a local contact's rows, shadow and raw columns the
  * server card's, behind the VERSION assert. Membership changes that the
- * server does not have yet stay (and keep the contact dirty).
+ * server does not have yet stay (and keep the contact dirty), unless it can
+ * never take them: those are put back (`revertedMembers`).
  */
 export function cleanWrite(local: LocalContact, card: ContactCardWire, ctx: Ctx, options: CleanWriteOptions) {
   const server = withoutMemberOf(card);
@@ -243,6 +249,7 @@ export function cleanWrite(local: LocalContact, card: ContactCardWire, ctx: Ctx,
     restore: true,
     parent: local.rawContactId,
     groupRowIdBySourceId: (g) => ctx.groupRowIdBySourceId(g),
+    editable: editableGroups(ctx, accountOf(local, ctx)),
   });
   const shadow = withMemberOf(shadowOf(server), members.memberOf);
   const raw = changedRawColumns(local, {
@@ -258,6 +265,7 @@ export function cleanWrite(local: LocalContact, card: ContactCardWire, ctx: Ctx,
     ops: ops.length ? [assertContact(local, options.assertDirty), ...ops] : [],
     writes: ops.length,
     pendingMembers: members.pending,
+    revertedMembers: members.reverted,
   };
 }
 

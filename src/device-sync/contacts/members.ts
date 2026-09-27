@@ -13,15 +13,36 @@
  * Per group, a local change wins where the server did not change, the server
  * wins elsewhere; both sides can only flip a membership the same way, so
  * memberships never conflict. A local change stays in the base until the
- * server has it, which keeps it visible to `planMembershipUploads`.
+ * server has it, which keeps it visible to `planMembershipUploads`; one the
+ * server can't take (a group in read-only books, or in another JMAP account)
+ * is put back by the next clean write instead.
  */
 import { Data, GroupMembership, MimeType } from '../android-columns';
+import { parseObjectRef } from '../common/ids';
 import type { ContactCardWire, ContactsContext, LocalDataRow } from '../planner';
 import type { ProviderOp } from '../types';
 import { text } from './cells';
 import { entryKey } from './keys';
 import { deleteData, insertUnit, updateData } from './ops';
 import { MEMBER_OF, type Unit } from './project';
+
+/**
+ * Group rights the engine can add to the context (not part of
+ * ContactsContext yet): whether a group card, by SOURCE_ID, is in read-only
+ * address books only. Without it every synced group counts as writable.
+ */
+export interface GroupRights {
+  groupReadOnly?(sourceId: string): boolean;
+}
+
+/**
+ * The groups whose members an upload for a contact of `account` can change:
+ * that account's groups outside read-only books. A membership change of any
+ * other group can never reach the server (`planMembershipUploads` skips it).
+ */
+export function editableGroups(ctx: ContactsContext & GroupRights, account: string): (sourceId: string) => boolean {
+  return (sourceId) => parseObjectRef(sourceId)?.accountId === account && !(ctx.groupReadOnly?.(sourceId) ?? false);
+}
 
 /** Remote memberships of a card, or null when the engine can't tell (memberships are then left alone). */
 export function remoteMemberships(card: ContactCardWire, ctx: ContactsContext): string[] | null {
@@ -71,6 +92,8 @@ export interface MemberPlan {
   /** Groups the device added the contact to, or removed it from, that the server does not show yet. */
   added: string[];
   removed: string[];
+  /** Local changes of groups that are not `editable` were put back to what the server has. */
+  reverted: boolean;
 }
 
 export interface MemberInput {
@@ -83,13 +106,19 @@ export interface MemberInput {
   restore: boolean;
   parent: number | { ref: number };
   groupRowIdBySourceId(sourceId: string): number | null;
+  /**
+   * Groups whose members the device may change (see `editableGroups`); a local
+   * change of another group is put back to what the server has rather than
+   * waiting for an upload that never comes. Without it every group counts.
+   */
+  editable?(sourceId: string): boolean;
 }
 
 export function planMemberships(input: MemberInput): MemberPlan {
   const live = input.rows.filter((r) => r.mimetype === MimeType.GROUP_MEMBERSHIP);
   if (input.remote === null) {
     // Without the engine's group index memberships are not synced: nothing is written or kept pending.
-    return { ops: [], writes: 0, memberOf: input.base, pending: false, added: [], removed: [] };
+    return { ops: [], writes: 0, memberOf: input.base, pending: false, added: [], removed: [], reverted: false };
   }
   const ops: ProviderOp[] = [];
   const rowOf = new Map<string, LocalDataRow>();
@@ -119,11 +148,17 @@ export function planMemberships(input: MemberInput): MemberPlan {
     after.add(g);
   };
 
+  let reverted = false;
   for (const g of [...new Set([...base, ...remote, ...rowOf.keys()])].sort()) {
     const inBase = base.has(g);
     const inRemote = remote.has(g);
     const row = rowOf.get(g);
-    const change = inBase ? (!row && deletions ? 'removed' : null) : row ? 'added' : null;
+    let change = inBase ? (!row && deletions ? 'removed' : null) : row ? 'added' : null;
+    if (change && input.editable && !input.editable(g)) {
+      // A change the server can't take (a group in read-only books, or another account's): its state comes back.
+      if (change === 'added' ? !inRemote : inRemote) reverted = true;
+      change = null;
+    }
     if (change === 'added') {
       keep(g, row!);
       if (!inRemote) pendingAdded.add(g);
@@ -145,5 +180,6 @@ export function planMemberships(input: MemberInput): MemberPlan {
     pending: unsynced || pendingAdded.size > 0 || pendingRemoved.size > 0,
     added: [...pendingAdded],
     removed: [...pendingRemoved],
+    reverted,
   };
 }

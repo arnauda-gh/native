@@ -3,14 +3,19 @@
 // themselves are tested in the other files of this folder.
 
 import { describe, expect, it } from 'vitest';
+import { MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
-import { addServerCards, createHarness, type Harness } from '../engine/harness';
+import { addServerCards, CONTACTS_AUTHORITY, createHarness, type Harness } from '../engine/harness';
 
-function real(): Harness {
-  const h = createHarness();
+function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
+  const h = createHarness(options);
   h.deps.planners = { contacts: contactsPlanner, calendar: calendarPlanner };
   return h;
+}
+
+function memberships(h: Harness, rawContactId: number) {
+  return h.device.rows('data').filter((d) => Number(d.raw_contact_id) === rawContactId && d.mimetype === MimeType.GROUP_MEMBERSHIP);
 }
 
 /** An address book of the personal account that this device does not sync. */
@@ -50,5 +55,25 @@ describe('contacts through the engine', () => {
     expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { deleted: 1 } } });
     expect(h.server.get('ContactCard', 'a', group)).toMatchObject({ addressBookIds: { [archive]: true } });
     expect(h.device.rows('groups')).toEqual([]);
+  });
+
+  it('puts back a membership in a group of another account, so no change waits for ever', async () => {
+    const h = real({ accounts: 'withShared' });
+    const book = h.server.all('AddressBook', 'team')[0].id as string;
+    h.prefs.contactsSelection[`team/${book}`] = true;
+    const team = h.server.addCard('team', { uid: 'g-team', kind: 'group', name: { full: 'Team' }, addressBookIds: { [book]: true } });
+    addServerCards(h, ['Ada Lovelace']);
+    expect((await h.run()).outcome).toBe('ok');
+
+    const ada = h.contactNamed('Ada Lovelace')!.id;
+    h.device.user.addToGroup(ada, Number(h.device.rows('groups').find((g) => g.sourceid === `team/${team}`)!._id));
+    const report = await h.run();
+
+    expect(report).toMatchObject({ outcome: 'ok', stats: { skipped: 1 } });
+    expect(h.contactNamed('Ada Lovelace')).toMatchObject({ dirty: false });
+    expect(memberships(h, ada)).toEqual([]);
+    expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();
+    // Turning sync off finds nothing waiting.
+    expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
   });
 });

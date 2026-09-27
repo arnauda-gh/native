@@ -23,7 +23,7 @@ import type {
 import type { ProviderOp } from '../types';
 import { encodeBaseline } from './cells';
 import { localChanges } from './diff';
-import { cardUnits, cleanWrite } from './download';
+import { accountOf, cardUnits, cleanWrite } from './download';
 import { newEntries, unitEdits, unitEntries, type Edit, type NewEntry } from './entries';
 import { parseEntryKey } from './keys';
 import { deletionsInferred, inPlaceEvidence, matchKind, type KindMatch } from './matching';
@@ -263,16 +263,13 @@ export function planContactUpload(local: LocalContact, ctx: Ctx): UploadPlan<Con
     // Nothing mapped changed (a star, a ringtone, an edit the server can't take): the rows
     // become the shadow's again and DIRTY is cleared behind the VERSION assert.
     const write = cleanWrite(local, local.shadow, ctx, { assertDirty: true, clearDirty: true });
-    return { kind: 'clean', ops: group(local, write.ops.length ? write.ops : [assertContact(local, true)]) };
+    const ops = group(local, write.ops.length ? write.ops : [assertContact(local, true)]);
+    // A membership the server can't take was put back, as a read-only edit is.
+    return write.revertedMembers ? { kind: 'revert', ops } : { kind: 'clean', ops };
   }
   const actions: UploadAction<ContactCardWire>[] = [{ kind: 'update', id: parseObjectRef(local.sourceId)!.id, patch }];
   if (backedOff(local, ctx, actions)) return { kind: 'skip', reason: `poisoned:${local.poison!.type}` };
   return { kind: 'upload', actions };
-}
-
-/** The JMAP account a local contact belongs to. */
-function accountOf(local: LocalContact, ctx: Ctx): string {
-  return parseObjectRef(local.sourceId)?.accountId ?? parseCollectionKey(local.pending?.target)?.accountId ?? ctx.jmapAccountId;
 }
 
 export function planContactAccepted(local: LocalContact, server: ContactCardWire, ctx: Ctx): AcceptedPlan {

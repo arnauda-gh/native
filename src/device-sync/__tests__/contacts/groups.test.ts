@@ -20,6 +20,15 @@ async function localGroup(h: Harness, groupId: string) {
   return g;
 }
 
+/** A group card in an address book this user may only read, on the device. */
+async function readOnlyGroup(h: Harness, members: Record<string, boolean> = {}) {
+  const shared = h.server.addAddressBook(JMAP, { name: 'Shared' });
+  h.readOnlyBooks.add(shared);
+  const gid = h.addCard({ uid: 'urn:uuid:group-shared', kind: 'group', name: { full: 'Shared' }, members, addressBookIds: { [shared]: true } });
+  await h.download(gid);
+  return gid;
+}
+
 /** A group card holding Anna (apple card), both on the device. */
 async function withGroup(members: Record<string, boolean> = { [appleCard().uid as string]: true }) {
   const h = new Harness();
@@ -125,6 +134,71 @@ describe('contacts groups: membership edits', () => {
     const rows = h.device.rows('data', 'raw_contact_id = ?', [rawId]).filter((r) => r[Data.MIMETYPE] === MimeType.GROUP_MEMBERSHIP);
     h.device.user.fossifySave(rawId, null, rows.map((r) => ({ [Data.MIMETYPE]: MimeType.GROUP_MEMBERSHIP, data1: r.data1 })));
     expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([]);
+  });
+
+  it('puts back an addition to a group in read-only books instead of keeping the contact dirty', async () => {
+    const h = new Harness();
+    const gid = await readOnlyGroup(h, { 'urn:uuid:someone': true });
+    const { rawId } = await h.seed(appleCard());
+    h.device.user.addToGroup(rawId, (await localGroup(h, gid)).groupId);
+    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(h.membershipGroups(rawId)).toEqual([]);
+    expect(h.dirty(rawId)).toBe(false);
+    expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([]);
+  });
+
+  it('puts back a removal from a group in read-only books', async () => {
+    const h = new Harness();
+    const gid = await readOnlyGroup(h, { [appleCard().uid as string]: true });
+    const { rawId } = await h.seed(appleCard());
+    const membership = (await h.contact(rawId)).rows.find((r) => r.mimetype === MimeType.GROUP_MEMBERSHIP)!;
+    h.device.user.deleteData(membership.id);
+    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
+    expect(h.dirty(rawId)).toBe(false);
+  });
+
+  it('puts back an addition to a group of another JMAP account', async () => {
+    const h = new Harness();
+    h.server.addAccount('t', { name: 'Team' });
+    const book = h.server.addAddressBook('t', { name: 'Team contacts' });
+    const team = h.server.addCard('t', { uid: 'urn:uuid:team', kind: 'group', name: { full: 'Team' }, addressBookIds: { [book]: true } });
+    const card = h.server.get('ContactCard', 't', team) as unknown as ContactCardWire;
+    await h.applyOk(h.planner.planGroupDownload(card, null, { ...h.ctx, jmapAccountId: 't' }).ops);
+    const { rawId } = await h.seed(appleCard());
+    h.device.user.addToGroup(rawId, (await h.groups()).find((g) => g.sourceId === `t/${team}`)!.groupId);
+    expect(h.membershipGroups(rawId)).toEqual([`t/${team}`]);
+    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(h.membershipGroups(rawId)).toEqual([]);
+    expect(h.dirty(rawId)).toBe(false);
+  });
+
+  it('still uploads a read-only contact joining a writable group (the group card is what changes)', async () => {
+    const h = new Harness();
+    const other = h.server.addAddressBook(JMAP, { name: 'Shared' });
+    h.readOnlyBooks.add(other);
+    const gid = h.addCard({ uid: 'urn:uuid:g5', kind: 'group', name: { full: 'Mine' }, members: { 'urn:uuid:someone': true } });
+    await h.download(gid);
+    const { rawId } = await h.seed({ ...appleCard(), addressBookIds: { [other]: true } });
+    h.device.user.addToGroup(rawId, (await localGroup(h, gid)).groupId);
+    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
+    expect(h.dirty(rawId)).toBe(true);
+    expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([
+      { kind: 'update', id: gid, patch: { [`members/${appleCard().uid as string}`]: true } },
+    ]);
+  });
+
+  it('uploads the edits it can next to a membership it puts back, and settles', async () => {
+    const h = new Harness();
+    const gid = await readOnlyGroup(h);
+    const { id, rawId } = await h.seed(appleCard());
+    h.device.user.addToGroup(rawId, (await localGroup(h, gid)).groupId);
+    h.device.user.updateData(h.rowsByKey(rawId)['emails:k1']._id as number, { data1: 'anna@new.example' });
+    const plan = await h.upload(rawId);
+    expect(actionsOf(plan)).toEqual([{ kind: 'update', id, patch: { 'emails/k1/address': 'anna@new.example' } }]);
+    expect(h.membershipGroups(rawId)).toEqual([]);
+    expect(h.dirty(rawId)).toBe(false);
   });
 
   it('does not take a server-side addition for a local removal while the contact is dirty', async () => {
