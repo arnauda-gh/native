@@ -189,7 +189,7 @@ describe('calendar planner: new events', () => {
     const h = await new Harness().setup();
     const id = h.fake.user.insertEvent(h.rowIds.get('r')!, { [Events.TITLE]: 'x', [Events.DTSTART]: 0, [Events.DTEND]: 1000, [Events.EVENT_TIMEZONE]: 'UTC', [Events.STATUS]: 1 });
     const plan = calendarPlanner.planUpload(await h.byRow(id), h.ctx);
-    expect(plan.kind).toBe('revert');
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'readOnly' });
     if (plan.kind === 'revert') await h.apply(plan.ops);
     expect(h.row(id)).toBeUndefined();
   });

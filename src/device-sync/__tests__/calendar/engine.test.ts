@@ -129,6 +129,36 @@ describe('calendar device edits through the engine', () => {
     expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `team/${id}`, side: 'upload', type: 'forbidden' })]);
     expect(h.events().filter((e) => e[Events.ORIGINAL_SYNC_ID] === `team/${id}`)).toEqual([]);
     expect(h.events().every((e) => Number(e[Events.DIRTY] ?? 0) === 0)).toBe(true);
+    // Nothing was stored at all: the report does not claim it was, without invitations.
+    expect(report.message ?? '').not.toContain('invitations not sent');
+  });
+
+  it('notes that invitations were not sent only when the change was stored without them', async () => {
+    const h = real();
+    const id = h.server.addEvent('a', {
+      uid: 'review-uid',
+      title: 'Review',
+      start: '2026-10-06T12:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      organizerCalendarAddress: 'mailto:alice@example.com',
+      participants: {
+        me: { '@type': 'Participant', calendarAddress: 'mailto:alice@example.com', roles: { owner: true, attendee: true }, participationStatus: 'accepted' },
+        bob: { '@type': 'Participant', calendarAddress: 'mailto:bob@example.com', roles: { attendee: true }, participationStatus: 'needs-action' },
+      },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const row = Number(h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!._id);
+    h.device.user.updateEvent(row, { [Events.TITLE]: 'Design review' });
+    // The server refuses the scheduling messages once (e.g. scheduling turned off): the change goes up without them.
+    h.server.setErrorFor('CalendarEvent', 'a', id, { type: 'forbidden' });
+
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+    expect(report.message).toContain('invitations not sent');
+    expect(h.server.get('CalendarEvent', 'a', id)).toMatchObject({ title: 'Design review' });
   });
 
   it('puts an event an app moved in place to a calendar of another account back into its calendar', async () => {
@@ -155,8 +185,9 @@ describe('calendar device edits through the engine', () => {
     expect(row()).toMatchObject({ [Events.CALENDAR_ID]: calendarRow(`a/${h.calendar}`), [Events.DIRTY]: 0 });
     expect(h.server.get('CalendarEvent', 'a', id)!.calendarIds).toEqual({ [h.calendar]: true });
     expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
-    // Nothing was sent; the change counts as skipped (a report entry needs the engine to report reverts).
+    // Nothing was sent; the change counts as skipped, and the report says why.
     expect(report).toMatchObject({ outcome: 'ok', stats: { uploaded: { created: 0, updated: 0, deleted: 0 }, skipped: 1 } });
+    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${id}`, side: 'upload', type: 'crossAccountMove' })]);
 
     // Together with another edit: that one uploads, and the row goes back all the same.
     h.device.user.updateEvent(Number(row()._id), { [Events.CALENDAR_ID]: calendarRow(`team/${team}`), [Events.TITLE]: 'Team lunch' });

@@ -141,7 +141,7 @@ export function planGroupUpload(local: LocalGroup, ctx: Ctx): UploadPlan<Contact
 
   if (local.deleted) {
     if (parsed) {
-      if (readOnly) return { kind: 'revert', ops: { ...group, ops: [deleteWhereId('groups', local.groupId)] }, refetch: true };
+      if (readOnly) return { kind: 'revert', ops: { ...group, ops: [deleteWhereId('groups', local.groupId)] }, refetch: true, reason: 'readOnly' };
       const books = Object.entries(local.shadow?.addressBookIds ?? {}).filter(([, on]) => on).map(([id]) => id);
       const selected = books.filter((id) => ctx.isSelected(collectionKey(parsed.accountId, id)));
       if (selected.length && selected.length < books.length) {
@@ -175,7 +175,9 @@ export function planGroupUpload(local: LocalGroup, ctx: Ctx): UploadPlan<Contact
 
   const shadowTitle = groupTitle(local.shadow);
   if (readOnly) {
-    return { kind: 'revert', ops: { ...group, ops: [assertGroup(local, null), updateGroup(local, { [Groups.TITLE]: shadowTitle ?? '', [Groups.DIRTY]: 0 })] } };
+    const ops = { ...group, ops: [assertGroup(local, null), updateGroup(local, { [Groups.TITLE]: shadowTitle ?? '', [Groups.DIRTY]: 0 })] };
+    // Reported when a rename is put back.
+    return sameCell(local.title, shadowTitle) ? { kind: 'revert', ops } : { kind: 'revert', ops, reason: 'readOnly' };
   }
   if (sameCell(title, shadowTitle) || title === null) {
     return { kind: 'clean', ops: { ...group, ops: [assertGroup(local, true), updateGroup(local, { [Groups.DIRTY]: 0 })] } };

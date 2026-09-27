@@ -73,6 +73,7 @@ describe('contacts through the engine', () => {
     const report = await h.run();
 
     expect(report).toMatchObject({ outcome: 'ok', stats: { skipped: 1 } });
+    expect(report.itemErrors).toEqual([expect.objectContaining({ side: 'upload', type: 'groupNotWritable' })]);
     expect(h.contactNamed('Ada Lovelace')).toMatchObject({ dirty: false });
     expect(memberships(h, ada)).toEqual([]);
     expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();

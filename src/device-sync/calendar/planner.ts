@@ -261,12 +261,12 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
       return { kind: 'upload', actions: [{ kind: 'destroy', id: null, uid }] };
     }
     if (!parseObjectRef(local.syncId)) return { kind: 'purge', ops: purgeGroup(local) };
-    if (ctx.isReadOnly(calendar.calendarId)) return { kind: 'revert', ops: purgeGroup(local), refetch: true };
+    if (ctx.isReadOnly(calendar.calendarId)) return { kind: 'revert', ops: purgeGroup(local), refetch: true, reason: SKIP.readOnly };
     return { kind: 'upload', actions: deleteActions(local, ctx) };
   }
 
   if (isNew) {
-    if (ctx.isReadOnly(calendar.calendarId)) return { kind: 'revert', ops: purgeGroup(local) };
+    if (ctx.isReadOnly(calendar.calendarId)) return { kind: 'revert', ops: purgeGroup(local), reason: SKIP.readOnly };
     const uid = claimedUid(local);
     const target = createTarget(local, ctx);
     if (!target) return { kind: 'skip', reason: SKIP.notOurCalendar };
@@ -292,7 +292,7 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
   // An instance Stalwart holds without its series can't be changed on its own.
   if (shadow.recurrenceId && !shadow.recurrenceRule) {
     const ops = revertGroup(local, ctx);
-    return ops ? { kind: 'revert', ops } : { kind: 'skip', reason: SKIP.instanceOnly };
+    return ops ? { kind: 'revert', ops, reason: SKIP.instanceOnly } : { kind: 'skip', reason: SKIP.instanceOnly };
   }
 
   let computation: UploadComputation;
@@ -310,9 +310,11 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
   });
   if ((readOnly && keys.length) || movedToReadOnly) {
     // RSVP, to the series or to occurrences, is the one change a calendar without write rights may take.
-    if (!(computation.rsvpOnly && ctx.calendar(calendar.calendarId)?.myRights?.mayRSVP && !movedToReadOnly)) {
+    const rsvp = computation.rsvpOnly && !movedToReadOnly;
+    if (!(rsvp && ctx.calendar(calendar.calendarId)?.myRights?.mayRSVP)) {
       const ops = revertGroup(local, ctx);
-      return ops ? { kind: 'revert', ops } : { kind: 'skip', reason: 'readOnly' };
+      const reason = rsvp ? SKIP.rsvpRefused : SKIP.readOnly;
+      return ops ? { kind: 'revert', ops, reason } : { kind: 'skip', reason };
     }
   }
   if (!keys.length) {
@@ -322,7 +324,7 @@ function planUpload(local: LocalEvent, ctx: CalendarContext): Plan {
     // write puts it back.
     if (computation.dropped.includes('calendar')) {
       const ops = revertGroup(local, ctx);
-      if (ops) return { kind: 'revert', ops };
+      if (ops) return { kind: 'revert', ops, reason: SKIP.crossAccountMove };
     }
     return { kind: 'clean', ops: cleanGroup(local, computation) };
   }

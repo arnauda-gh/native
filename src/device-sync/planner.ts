@@ -76,7 +76,8 @@ export type UploadAction<TObj> =
  * - `claim`: a new item without a pending uid: apply `ops` (they write the uid), then re-read and plan again.
  * - `upload`: send `actions`; `local` is what they were computed from.
  * - `purge`: a deleted item that never reached the server: apply `ops`.
- * - `revert`: the item may not be changed on the server (read-only): apply `ops` (rewrite from the shadow).
+ * - `revert`: the item may not be changed on the server (read-only): apply `ops` (rewrite from the shadow);
+ *   `reason`, set when a device change is put back, goes to the report.
  * - `skip`: poisoned and backed off, or not representable; `reason` goes to the report.
  */
 export type UploadPlan<TObj> =
@@ -84,7 +85,7 @@ export type UploadPlan<TObj> =
   | { kind: 'claim'; ops: OpGroup }
   | { kind: 'upload'; actions: UploadAction<TObj>[] }
   | { kind: 'purge'; ops: OpGroup }
-  | { kind: 'revert'; ops: OpGroup; refetch?: boolean }
+  | { kind: 'revert'; ops: OpGroup; refetch?: boolean; reason?: string }
   | { kind: 'skip'; reason: string };
 
 export interface DownloadPlan {

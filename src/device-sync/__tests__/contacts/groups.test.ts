@@ -182,7 +182,7 @@ describe('contacts groups: membership edits', () => {
     const gid = await readOnlyGroup(h, { 'urn:uuid:someone': true });
     const { rawId } = await h.seed(appleCard());
     h.device.user.addToGroup(rawId, (await localGroup(h, gid)).groupId);
-    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(await h.upload(rawId)).toMatchObject({ kind: 'revert', reason: 'groupNotWritable' });
     expect(h.membershipGroups(rawId)).toEqual([]);
     expect(h.dirty(rawId)).toBe(false);
     expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([]);
@@ -194,7 +194,7 @@ describe('contacts groups: membership edits', () => {
     const { rawId } = await h.seed(appleCard());
     const membership = (await h.contact(rawId)).rows.find((r) => r.mimetype === MimeType.GROUP_MEMBERSHIP)!;
     h.device.user.deleteData(membership.id);
-    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(await h.upload(rawId)).toMatchObject({ kind: 'revert', reason: 'groupNotWritable' });
     expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
     expect(h.dirty(rawId)).toBe(false);
   });
@@ -209,7 +209,7 @@ describe('contacts groups: membership edits', () => {
     const { rawId } = await h.seed(appleCard());
     h.device.user.addToGroup(rawId, (await h.groups()).find((g) => g.sourceId === `t/${team}`)!.groupId);
     expect(h.membershipGroups(rawId)).toEqual([`t/${team}`]);
-    expect((await h.upload(rawId)).kind).toBe('revert');
+    expect(await h.upload(rawId)).toMatchObject({ kind: 'revert', reason: 'groupNotWritable' });
     expect(h.membershipGroups(rawId)).toEqual([]);
     expect(h.dirty(rawId)).toBe(false);
   });
@@ -222,7 +222,10 @@ describe('contacts groups: membership edits', () => {
     await h.download(gid);
     const { rawId } = await h.seed({ ...appleCard(), addressBookIds: { [other]: true } });
     h.device.user.addToGroup(rawId, (await localGroup(h, gid)).groupId);
-    expect((await h.upload(rawId)).kind).toBe('revert');
+    const plan = await h.upload(rawId);
+    expect(plan.kind).toBe('revert');
+    // Nothing of its own was put back: nothing to report.
+    expect(plan).not.toHaveProperty('reason');
     expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
     expect(h.dirty(rawId)).toBe(true);
     expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([
@@ -319,7 +322,7 @@ describe('contacts groups: device edits of groups', () => {
     const g = await localGroup(h, gid);
     h.device.user.updateGroup(g.groupId, { [Groups.TITLE]: 'Mine now' });
     const plan = h.planner.planGroupUpload(await localGroup(h, gid), h.ctx);
-    expect(plan.kind).toBe('revert');
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'readOnly' });
     await h.applyOk(opsOf(plan));
     expect(await localGroup(h, gid)).toMatchObject({ title: 'Friends', dirty: false });
   });

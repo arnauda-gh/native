@@ -79,12 +79,17 @@ import {
   wallMs,
 } from './zoned-time';
 
-/** Why an item is not uploaded now. */
+/** Why an item is not uploaded now (a skip), or why its change was put back (a revert). */
 export const SKIP = {
   dstAmbiguous: 'dstAmbiguous',
   ruleNotRepresentable: 'ruleNotRepresentable',
   instanceOnly: 'instanceOnly',
   notOurCalendar: 'notOurCalendar',
+  readOnly: 'readOnly',
+  /** The user's answer, in a calendar that takes no answers either. */
+  rsvpRefused: 'rsvpRefused',
+  /** Moved in place to a calendar of another JMAP account: no patch can do that. */
+  crossAccountMove: 'crossAccountMove',
 } as const;
 
 export class SkipUpload extends Error {

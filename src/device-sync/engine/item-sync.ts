@@ -913,9 +913,9 @@ export abstract class ItemSync {
         this.env.report.stats.skipped++;
         this.env.report.itemError({ ref, side: 'upload', type: plan.reason });
       } else if (plan.kind === 'revert') {
-        // It may not be created where it was made (a read-only calendar): the row goes, and the report says so.
+        // It may not be created where it was made (a read-only calendar): the row goes, and the report says why.
         this.env.report.stats.skipped++;
-        this.env.report.itemError({ ref, side: 'upload', type: 'readOnly' });
+        if (plan.reason) this.env.report.itemError({ ref, side: 'upload', type: plan.reason });
         works.push(this.planWork(acct, held, 'revert', plan.ops));
       } else if (plan.kind === 'claim' || plan.kind === 'purge' || plan.kind === 'clean') {
         works.push(this.planWork(acct, held, plan.kind, plan.ops));
@@ -1047,6 +1047,7 @@ export abstract class ItemSync {
       }
       case 'revert':
         report.stats.skipped++;
+        if (plan.reason) report.itemError({ ref, side: 'upload', type: plan.reason });
         works.push(this.planWork(acct, held, 'revert', plan.ops));
         if (plan.refetch) {
           const id = idInAccount(meta.sourceId, acct);
@@ -1328,7 +1329,11 @@ export abstract class ItemSync {
     retry: Pending[],
   ): Promise<Work[]> {
     const failure = outcomes.find((o): o is Extract<Outcome, { ok: false }> => !o.ok);
-    if (!failure) return this.succeeded(acct, p, outcomes, objects);
+    if (!failure) {
+      // Stored without the scheduling messages it asked for (see `forbidden` below).
+      if (p.noScheduling) this.env.report.note('invitations not sent');
+      return this.succeeded(acct, p, outcomes, objects);
+    }
     switch (classifySetError(failure.error, failure.action.kind)) {
       case 'notFound':
         if (failure.action.kind === 'destroy') {
@@ -1346,7 +1351,7 @@ export abstract class ItemSync {
       case 'forbidden':
         if (failure.scheduling && !p.noScheduling) {
           // Scheduling is off, the account has no calendar address, or no permission: store the change without it.
-          this.env.report.note('invitations not sent');
+          // A second refusal is about rights, not invitations: the note waits for the change to be stored.
           retry.push({ ...p, noScheduling: true });
           return [];
         }

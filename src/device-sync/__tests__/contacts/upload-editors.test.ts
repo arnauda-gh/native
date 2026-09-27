@@ -359,7 +359,7 @@ describe('contacts upload: read-only and poisoned contacts', () => {
     const { rawId } = await h.seed(appleCard());
     h.device.user.updateData(h.rowsByKey(rawId)['emails:k1']._id as number, { data1: 'hacked@example.org' });
     const plan = await uploadPlan(h, rawId);
-    expect(plan.kind).toBe('revert');
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'readOnly' });
     await h.upload(rawId);
     expect(h.rowsByKey(rawId)['emails:k1'].data1).toBe('anna@example.com');
     expect(h.dirty(rawId)).toBe(false);
@@ -370,7 +370,7 @@ describe('contacts upload: read-only and poisoned contacts', () => {
     h.readOnlyBooks.add(h.book);
     const { rawId } = await h.seed(appleCard());
     h.device.user.deleteContact(rawId);
-    expect(await uploadPlan(h, rawId)).toMatchObject({ kind: 'revert', refetch: true });
+    expect(await uploadPlan(h, rawId)).toMatchObject({ kind: 'revert', refetch: true, reason: 'readOnly' });
   });
 
   it('skips a poisoned contact until it changes or the back-off ends', async () => {

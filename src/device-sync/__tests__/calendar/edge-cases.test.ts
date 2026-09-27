@@ -15,7 +15,7 @@ describe('calendar planner: edge cases', () => {
     const { h, id } = await synced(single({ calendarIds: { r: true } }));
     h.fake.user.deleteEvent(id);
     const plan = calendarPlanner.planUpload((await h.local('e1'))!, h.ctx);
-    expect(plan).toMatchObject({ kind: 'revert', refetch: true });
+    expect(plan).toMatchObject({ kind: 'revert', refetch: true, reason: 'readOnly' });
     if (plan.kind === 'revert') await h.apply(plan.ops);
     expect(await h.events()).toEqual([]);
   });
@@ -24,7 +24,7 @@ describe('calendar planner: edge cases', () => {
     const { h, id } = await synced(single({ recurrenceId: '2026-10-06T12:00:00', recurrenceIdTimeZone: 'Europe/Berlin' }));
     h.fake.user.updateEvent(id, { [Events.TITLE]: 'Mine' });
     const plan = calendarPlanner.planUpload((await h.local('e1'))!, h.ctx);
-    expect(plan.kind).toBe('revert');
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'instanceOnly' });
     if (plan.kind === 'revert') await h.apply(plan.ops);
     expect(h.row(id)).toMatchObject({ [Events.TITLE]: 'Lunch', [Events.DIRTY]: 0 });
   });

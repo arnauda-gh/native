@@ -285,12 +285,16 @@ describe('calendar planner: uploads of edited events', () => {
     const { h, id } = await synced(event);
     h.fake.user.updateEvent(id, { [Events.TITLE]: 'Mine now' });
     const plan = calendarPlanner.planUpload((await h.local('e1'))!, h.ctx);
-    expect(plan.kind).toBe('revert');
+    expect(plan).toMatchObject({ kind: 'revert', reason: 'readOnly' });
     if (plan.kind === 'revert') await h.apply(plan.ops);
     expect(h.row(id)).toMatchObject({ [Events.TITLE]: 'Lunch', [Events.DIRTY]: 0 });
 
     h.fake.user.setAttendeeStatus(id, ME, 2);
     expect(updateOf(calendarPlanner.planUpload((await h.local('e1'))!, h.ctx)).patch).toEqual({ 'participants/me/participationStatus': 'declined' });
+
+    // Without mayRSVP, the answer is put back too, and says why.
+    const noRsvp = { ...h.ctx, calendar: (cid: string) => (cid === 'r' ? { ...h.ctx.calendar(cid)!, myRights: { mayReadItems: true } } : h.ctx.calendar(cid)) };
+    expect(calendarPlanner.planUpload((await h.local('e1'))!, noRsvp)).toMatchObject({ kind: 'revert', reason: 'rsvpRefused' });
   });
 
   it('skips a poisoned item until it changes or the back-off ends', async () => {

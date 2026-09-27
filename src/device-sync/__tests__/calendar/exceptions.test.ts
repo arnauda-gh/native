@@ -249,7 +249,7 @@ describe('calendar planner: recurrence edits made on the device', () => {
     expect(action.sendSchedulingMessages).toBe(true);
     // Anything more than the answer is still the calendar owner's to change.
     h.fake.user.updateEvent(added, { [Events.TITLE]: 'Mine now' });
-    expect(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx).kind).toBe('revert');
+    expect(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx)).toMatchObject({ kind: 'revert', reason: 'readOnly' });
   });
 
   it('turns EXDATE entries an app adds or removes into exclusions and re-inclusions', async () => {

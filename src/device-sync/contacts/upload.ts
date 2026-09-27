@@ -219,7 +219,7 @@ function deletedPlan(local: LocalContact, ctx: Ctx): UploadPlan<ContactCardWire>
   const purge = (): OpGroup => group(local, [deleteWhereId('raw_contacts', local.rawContactId)]);
   const ref = parseObjectRef(local.sourceId);
   if (ref) {
-    if (readOnlyOnServer(local, ctx)) return { kind: 'revert', ops: purge(), refetch: true };
+    if (readOnlyOnServer(local, ctx)) return { kind: 'revert', ops: purge(), refetch: true, reason: 'readOnly' };
     const books = Object.entries(local.shadow?.addressBookIds ?? {}).filter(([, on]) => on).map(([id]) => id);
     const selected = books.filter((id) => ctx.isSelected(collectionKey(ref.accountId, id)));
     // A card that is also in books this device does not sync only leaves the synced ones.
@@ -257,7 +257,10 @@ export function planContactUpload(local: LocalContact, ctx: Ctx): UploadPlan<Con
   if (!local.shadow) return { kind: 'skip', reason: 'noShadow' };
   if (readOnlyOnServer(local, ctx)) {
     const write = cleanWrite(local, local.shadow, ctx, { assertDirty: null, clearDirty: true });
-    return { kind: 'revert', ops: group(local, write.ops.length ? write.ops : [assertContact(local, null)]) };
+    const ops = group(local, write.ops.length ? write.ops : [assertContact(local, null)]);
+    // Reported when an edit is put back (joining a writable group is no edit of the card: it still uploads).
+    const reason = Object.keys(updatePatch(local, ctx)).length ? 'readOnly' : write.revertedMembers ? 'groupNotWritable' : null;
+    return reason ? { kind: 'revert', ops, reason } : { kind: 'revert', ops };
   }
   const patch = updatePatch(local, ctx);
   if (!Object.keys(patch).length) {
@@ -266,7 +269,7 @@ export function planContactUpload(local: LocalContact, ctx: Ctx): UploadPlan<Con
     const write = cleanWrite(local, local.shadow, ctx, { assertDirty: true, clearDirty: true });
     const ops = group(local, write.ops.length ? write.ops : [assertContact(local, true)]);
     // A membership the server can't take was put back, as a read-only edit is.
-    return write.revertedMembers ? { kind: 'revert', ops } : { kind: 'clean', ops };
+    return write.revertedMembers ? { kind: 'revert', ops, reason: 'groupNotWritable' } : { kind: 'clean', ops };
   }
   const actions: UploadAction<ContactCardWire>[] = [{ kind: 'update', id: parseObjectRef(local.sourceId)!.id, patch }];
   if (backedOff(local, ctx, actions)) return { kind: 'skip', reason: `poisoned:${local.poison!.type}` };
