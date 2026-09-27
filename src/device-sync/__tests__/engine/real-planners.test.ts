@@ -11,6 +11,7 @@ import {
   addDeviceContact,
   addServerCards,
   CALENDAR_AUTHORITY,
+  CONTACTS_AUTHORITY,
   createHarness,
   rowWrites,
   type Harness,
@@ -153,6 +154,37 @@ describe('device sync engine with the real planners', () => {
 
     expect(members()).toEqual(['Grace Hopper']);
     expect(h.contacts().every((c) => !c.dirty)).toBe(true);
+  });
+
+  describe('a membership edit on the device', () => {
+    async function adaJoinsFriends() {
+      const h = real();
+      const [ada] = addServerCards(h, ['Ada Lovelace']);
+      const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: {} });
+      await h.run();
+      const contact = h.contactNamed('Ada Lovelace')!;
+      h.device.user.addToGroup(contact.id, Number(h.device.rows('groups')[0]._id));
+      return { h, ada, group, contact };
+    }
+
+    it('leaves the contact clean once the group card shows it', async () => {
+      const { h, ada, group, contact } = await adaJoinsFriends();
+
+      expect((await h.run()).outcome).toBe('ok');
+
+      const uid = h.server.get('ContactCard', 'a', ada)!.uid as string;
+      expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [uid]: true });
+      expect(h.contacts().find((c) => c.id === contact.id)).toMatchObject({ dirty: false });
+    });
+
+    it('leaves nothing waiting for the teardown once it is uploaded', async () => {
+      const { h, ada, group } = await adaJoinsFriends();
+
+      expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+
+      const uid = h.server.get('ContactCard', 'a', ada)!.uid as string;
+      expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [uid]: true });
+    });
   });
 
   describe('a device edit of an object the server moved out of every synced collection', () => {

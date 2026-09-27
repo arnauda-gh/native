@@ -710,7 +710,31 @@ export class ContactsSync extends ItemSync {
       }
       pending.actions.push(action as Pending['actions'][number]);
     }
-    if (byGroup.size) await this.send(acct, [...byGroup.values()]);
+    if (!byGroup.size) return;
+    await this.send(acct, [...byGroup.values()]);
+    await this.cleanAfterMemberships(acct, rows);
+  }
+
+  /**
+   * A contact stays dirty until the group cards show its membership edits.
+   * Those that now have nothing else to upload are cleaned right away, so
+   * nothing looks like it still waits (turning sync off would ask about it).
+   */
+  private async cleanAfterMemberships(acct: string, rowIds: number[]): Promise<void> {
+    await this.refreshGroups();
+    const works: Work[] = [];
+    for (const contact of await this.contactKind.loadByRowIds(rowIds)) {
+      if (!contact.dirty || contact.deleted || this.isStale(acct, contact.sourceId)) continue;
+      let plan;
+      try {
+        plan = this.contactKind.planUpload(contact, acct);
+      } catch (error) {
+        this.plannerFailed(acct, contact.sourceId ?? `row:${contact.rawContactId}`, 'upload', error);
+        continue;
+      }
+      if (plan.kind === 'clean') works.push({ group: plan.ops });
+    }
+    await this.env.writer.write(works);
   }
 
   // ── Deselection ──
