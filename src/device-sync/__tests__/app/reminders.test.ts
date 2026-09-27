@@ -1,9 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const h = vi.hoisted(() => ({ available: true }));
+// Android's side: the device's auto-sync, the account's calendar sync and the calendar permission.
+const h = vi.hoisted(() => ({ available: true, master: true, automatic: true, permitted: true }));
 
 vi.mock('../../native', () => ({
   isDeviceSyncAvailable: () => h.available,
+  getSyncSettings: vi.fn(async () => ({
+    masterAutomatic: h.master,
+    authorities: {
+      'com.android.contacts': { syncable: 1, automatic: false, periodicSeconds: 0, active: false, pending: false },
+      'com.android.calendar': { syncable: 1, automatic: h.automatic, periodicSeconds: 3600, active: false, pending: false },
+    },
+  })),
+}));
+
+vi.mock('../../app/permissions', () => ({
+  hasSyncPermissions: vi.fn(async () => h.permitted),
 }));
 
 import { CALENDAR_AUTHORITY, CONTACTS_AUTHORITY } from '../../types';
@@ -34,10 +46,16 @@ function calendarSync(extra: Record<string, unknown> = {}): void {
   });
 }
 
+/** Waits until the calendar app reminds of Alice's synced events (Android's side is read when the filter is asked for). */
+async function remindedByCalendarApp(): Promise<void> {
+  await vi.waitFor(() => expect(remindedOnDevice(ALICE, 'c')).not.toBeNull());
+}
+
 beforeEach(async () => {
   await waitForDeviceSyncHydration();
-  h.available = true;
+  Object.assign(h, { available: true, master: true, automatic: true, permitted: true });
   calendarSync();
+  await remindedByCalendarApp();
 });
 
 describe('remindedOnDevice', () => {
@@ -79,6 +97,36 @@ describe('remindedOnDevice', () => {
   it('does nothing where device sync is not available', () => {
     h.available = false;
     expect(remindedOnDevice(ALICE, 'c')).toBeNull();
+  });
+});
+
+describe("remindedOnDevice while the device calendar can't receive events", () => {
+  it('leaves the reminders to Bulwark while calendar sync is paused in Android settings', async () => {
+    h.automatic = false;
+    await vi.waitFor(() => expect(remindedOnDevice(ALICE, 'c')).toBeNull());
+  });
+
+  it("leaves them to Bulwark while Android's auto-sync is off: Android then runs manual syncs only", async () => {
+    h.master = false;
+    await vi.waitFor(() => expect(remindedOnDevice(ALICE, 'c')).toBeNull());
+  });
+
+  it('leaves them to Bulwark while the calendar permission is revoked', async () => {
+    h.permitted = false;
+    await vi.waitFor(() => expect(remindedOnDevice(ALICE, 'c')).toBeNull());
+  });
+
+  it('hands them back to the calendar app once it syncs again, and tells the scheduler both times', async () => {
+    const listener = vi.fn();
+    const off = onDeviceRemindersChange(listener);
+    h.automatic = false;
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(1));
+    expect(remindedOnDevice(ALICE, 'c')).toBeNull();
+
+    h.automatic = true;
+    await vi.waitFor(() => expect(listener).toHaveBeenCalledTimes(2));
+    expect(remindedOnDevice(ALICE, 'c')).not.toBeNull();
+    off();
   });
 });
 
