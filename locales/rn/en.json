@@ -470,6 +470,7 @@
       "email_step_title": "What's your email address?",
       "email_step_title_add": "What's the other address?",
       "email_title": "Use my email address",
+      "err_account_limit_detail": "Remove an account in Settings to add another one.",
       "err_bad_detail": "Check your email and password. If your account uses two-factor sign-in, create an app password in the webmail and use that here.",
       "err_bad_title": "That didn't work",
       "err_cert_detail": "The server's security certificate was rejected. If this is your own server, check the certificate is valid and not expired.",

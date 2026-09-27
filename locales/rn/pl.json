@@ -460,6 +460,7 @@
       "email_step_title": "Jaki jest Twój adres e-mail?",
       "email_step_title_add": "Jaki jest drugi adres?",
       "email_title": "Użyj mojego adresu e-mail",
+      "err_account_limit_detail": "Usuń konto w Ustawieniach, aby dodać kolejne.",
       "err_bad_detail": "Sprawdź adres e-mail i hasło. Jeśli Twoje konto używa logowania dwuskładnikowego, utwórz hasło aplikacji w webmailu i użyj go tutaj.",
       "err_bad_title": "To nie zadziałało",
       "err_cert_detail": "Certyfikat bezpieczeństwa serwera został odrzucony. Jeśli to Twój własny serwer, sprawdź, czy certyfikat jest ważny i nie wygasł.",

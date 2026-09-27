@@ -460,6 +460,7 @@
       "email_step_title": "Mi az e-mail-címed?",
       "email_step_title_add": "Mi a másik cím?",
       "email_title": "E-mail-címem használata",
+      "err_account_limit_detail": "Másik fiók hozzáadásához távolíts el egyet a Beállításokban.",
       "err_bad_detail": "Ellenőrizd az e-mail-címet és a jelszót. Ha a fiókod kétlépcsős bejelentkezést használ, hozz létre alkalmazásjelszót a webmailben, és azt használd itt.",
       "err_bad_title": "Ez nem sikerült",
       "err_cert_detail": "A szerver biztonsági tanúsítványát elutasítottuk. Ha ez a saját szervered, ellenőrizd, hogy a tanúsítvány érvényes és nem járt le.",

@@ -460,6 +460,7 @@
       "email_step_title": "Wie lautet Ihre E-Mail-Adresse?",
       "email_step_title_add": "Wie lautet die andere Adresse?",
       "email_title": "Meine E-Mail-Adresse verwenden",
+      "err_account_limit_detail": "Entfernen Sie in den Einstellungen ein Konto, um ein weiteres hinzuzufügen.",
       "err_bad_detail": "Prüfen Sie E-Mail-Adresse und Passwort. Wenn Ihr Konto die Zwei-Faktor-Anmeldung nutzt, erstellen Sie im Webmail ein App-Passwort und verwenden Sie es hier.",
       "err_bad_title": "Das hat nicht funktioniert",
       "err_cert_detail": "Das Sicherheitszertifikat des Servers wurde abgelehnt. Wenn dies Ihr eigener Server ist, prüfen Sie, ob das Zertifikat gültig und nicht abgelaufen ist.",

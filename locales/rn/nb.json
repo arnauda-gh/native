@@ -460,6 +460,7 @@
       "email_step_title": "Hva er e-postadressen din?",
       "email_step_title_add": "Hva er den andre adressen?",
       "email_title": "Bruk e-postadressen min",
+      "err_account_limit_detail": "Fjern en konto i Innstillinger for å legge til en ny.",
       "err_bad_detail": "Sjekk e-postadressen og passordet. Hvis kontoen din bruker tofaktorautentisering, oppretter du et app-passord i nettposten og bruker det her.",
       "err_bad_title": "Det fungerte ikke",
       "err_cert_detail": "Serverens sikkerhetssertifikat ble avvist. Hvis dette er din egen server, må du sjekke at sertifikatet er gyldig og ikke utløpt.",

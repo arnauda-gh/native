@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { describeLoginError } from '../login-errors';
 import { PairingError, type PairingErrorReason } from '../oauth';
+import { AccountLimitError } from '../account-utils';
 
 function named(name: string, message: string): Error {
   const err = new Error(message);
@@ -18,6 +19,16 @@ describe('describeLoginError', () => {
   it('explains the auth store\'s "Session expired" notice', () => {
     expect(describeLoginError('Session expired').title).toBe('Your session has expired. Please sign in again.');
     expect(describeLoginError('Session expired for this account').title).toBe('Your session has expired. Please sign in again.');
+  });
+
+  it('says the account limit is reached and what to do about it', () => {
+    const want = {
+      title: 'Maximum of 10 accounts reached.',
+      detail: 'Remove an account in Settings to add another one.',
+    };
+    expect(describeLoginError(new AccountLimitError())).toEqual(want);
+    // As the store keeps it: the message alone.
+    expect(describeLoginError('Maximum of 10 accounts reached')).toEqual(want);
   });
 
   it('names the host it could not reach', () => {

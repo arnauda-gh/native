@@ -460,6 +460,7 @@
       "email_step_title": "Qual è il tuo indirizzo email?",
       "email_step_title_add": "Qual è l'altro indirizzo?",
       "email_title": "Usa il mio indirizzo email",
+      "err_account_limit_detail": "Rimuovi un account in Impostazioni per aggiungerne un altro.",
       "err_bad_detail": "Controlla email e password. Se il tuo account usa l'autenticazione a due fattori, crea una password per le app nella webmail e usala qui.",
       "err_bad_title": "Non ha funzionato",
       "err_cert_detail": "Il certificato di sicurezza del server è stato rifiutato. Se è il tuo server, verifica che il certificato sia valido e non scaduto.",

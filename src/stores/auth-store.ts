@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { jmapClient, AuthenticationError, NetworkError } from '../api/jmap-client';
+import { jmapClient, AuthenticationError, NetworkError, type ClientSnapshot } from '../api/jmap-client';
 import type { JMAPSession } from '../api/types';
 import { fetchAccountDisplayName, isStalwartSupported } from '../api/account-security';
 import { useAccountStore } from './account-store';
@@ -12,7 +12,7 @@ import { flushPersistedWrites } from './persist-storage';
 import { clearEmailDetailCache } from '../lib/email-detail-cache';
 import { clearBodyDocuments } from '../lib/email-body-document';
 import { clearBodyHeights } from '../lib/body-heights';
-import { generateAccountId } from '../lib/account-utils';
+import { AccountLimitError, generateAccountId, MAX_ACCOUNTS } from '../lib/account-utils';
 import {
   runWebmailHandoff,
   redeemPairingCode,
@@ -168,6 +168,39 @@ function hostOfUrl(url: string): string {
   return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split(/[/?#]/)[0];
 }
 
+// Room in the registry for the account a sign-in is about to add. One it
+// already holds is an update and always fits; without an id (a code not yet
+// redeemed, a browser sign-in not yet back) a full registry means no.
+function assertRoomForAccount(accountId?: string): void {
+  const { accounts } = useAccountStore.getState();
+  if (accountId && accounts.some((a) => a.id === accountId)) return;
+  if (accounts.length >= MAX_ACCOUNTS) throw new AccountLimitError();
+}
+
+// Adding an account to a full registry: refuse before a sign-in code is
+// spent or a browser sign-in started, since what they buy can't be kept.
+function refuseAddWhenFull(set: (partial: Partial<AuthState>) => void, opts?: { addAccount?: boolean }): void {
+  if (!opts?.addAccount) return;
+  try {
+    assertRoomForAccount();
+  } catch (err) {
+    set({ isLoading: false, error: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
+}
+
+// connect() points the shared client at the new account and stores its
+// credentials before the registry has taken it. When registering it fails
+// (the account limit), undo both: the live account, when one is being added
+// to, gets the client back, and an account the registry never took keeps no
+// credentials behind. Otherwise every request would go out as the new
+// account while the app still shows the old one.
+async function undoConnect(previous: ClientSnapshot | null, accountId: string, wasRegistered: boolean): Promise<void> {
+  if (previous) jmapClient.restoreSnapshot(previous);
+  else jmapClient.reset();
+  if (!wasRegistered) await jmapClient.clearAccountCredentials(accountId).catch(() => undefined);
+}
+
 // Best-effort RFC 7009 revocation of an account's refresh token on sign-out.
 // QR-paired bundles are left alone: webmail up to 1.11 handed the phone the
 // desktop's own refresh token, and newer ones hand out a separate grant whose
@@ -239,21 +272,29 @@ async function completeOAuthHandoff(
     throw err;
   }
   const { session, username, accountId } = connected;
+
+  const accountStore = useAccountStore.getState();
+  const wasRegistered = !!accountStore.getAccountById(accountId);
+  try {
+    accountStore.addAccount({
+      serverUrl: result.serverUrl.replace(/\/+$/, ''),
+      username,
+      displayName: username,
+      email: username,
+      lastLoginAt: Date.now(),
+      isConnected: true,
+      hasError: false,
+    });
+  } catch (err) {
+    await undoConnect(previous, accountId, wasRegistered);
+    throw err;
+  }
+  // Contacts/calendar are still single-bucket, so wipe those now that the
+  // new account is registered and the one the client serves.
   if (previous) {
     useContactsStore.getState().reset();
     useCalendarStore.getState().reset();
   }
-
-  const accountStore = useAccountStore.getState();
-  accountStore.addAccount({
-    serverUrl: result.serverUrl.replace(/\/+$/, ''),
-    username,
-    displayName: username,
-    email: username,
-    lastLoginAt: Date.now(),
-    isConnected: true,
-    hasError: false,
-  });
   accountStore.setActiveAccount(accountId);
   useEmailStore.getState().setActiveAccount(accountId);
 
@@ -303,7 +344,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Adding an additional account: keep the live connection until the new
     // sign-in succeeded so a typo doesn't kill the current session.
     const previous = opts?.addAccount && get().isAuthenticated ? jmapClient.snapshot() : null;
+    const accountId = generateAccountId(username, serverUrl.replace(/\/+$/, ''));
     try {
+      // A new account with no room left fails here, before connect swaps
+      // the live client over or stores credentials for it.
+      assertRoomForAccount(accountId);
+      const wasRegistered = !!useAccountStore.getState().getAccountById(accountId);
       let session: JMAPSession;
       try {
         session = await jmapClient.connect(serverUrl, username, password, opts?.totp);
@@ -311,24 +357,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (previous) jmapClient.restoreSnapshot(previous);
         throw err;
       }
+
+      const accountStore = useAccountStore.getState();
+      try {
+        accountStore.addAccount({
+          serverUrl: serverUrl.replace(/\/+$/, ''),
+          username,
+          displayName: username,
+          email: username,
+          lastLoginAt: Date.now(),
+          isConnected: true,
+          hasError: false,
+        });
+      } catch (err) {
+        await undoConnect(previous, accountId, wasRegistered);
+        throw err;
+      }
       // Contacts/calendar are still single-bucket, so wipe those now that
-      // the new account is the one the client serves.
+      // the new account is registered and the one the client serves.
       if (previous) {
         useContactsStore.getState().reset();
         useCalendarStore.getState().reset();
       }
-      const accountId = generateAccountId(username, serverUrl.replace(/\/+$/, ''));
-
-      const accountStore = useAccountStore.getState();
-      accountStore.addAccount({
-        serverUrl: serverUrl.replace(/\/+$/, ''),
-        username,
-        displayName: username,
-        email: username,
-        lastLoginAt: Date.now(),
-        isConnected: true,
-        hasError: false,
-      });
       accountStore.setActiveAccount(accountId);
       // Swap the email store's active view to the new account so the rest of
       // this function (and refetchFeatureStores) writes to the right bucket.
@@ -360,6 +410,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loginViaWebmail: async (webmailUrl, opts) => {
     set({ isLoading: true, error: null });
+    refuseAddWhenFull(set, opts);
     // Discovery finds the *JMAP* host; a Bulwark webmail is not necessarily
     // served there. Opening `/login?mobile_redirect_uri=…` on a bare Stalwart
     // lands on a 404 or the admin page, so check first and fall back to the
@@ -415,6 +466,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loginViaOAuth: async (serverUrl, opts) => {
     set({ isLoading: true, error: null });
+    refuseAddWhenFull(set, opts);
     const base = serverUrl.replace(/\/+$/, '');
     let tokens;
     try {
@@ -453,6 +505,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         host: hostOfUrl(webmailUrl),
       });
     }
+    // With no room for another account the code stays unspent: redeeming it
+    // would only buy a sign-in the registry can't keep.
+    refuseAddWhenFull(set, opts);
     pairingCodesSeen.add(code);
 
     set({ isLoading: true, error: null });
@@ -475,7 +530,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // keeps for that step), and the account limit, which a new code won't fix.
     const serverHost = hostOfUrl(result.serverUrl);
     const connectFailed = (err: unknown): unknown => {
-      if (err instanceof Error && (err.name === 'TotpRequiredError' || /maximum of \d+ accounts/i.test(err.message))) {
+      if (err instanceof Error && (err.name === 'TotpRequiredError' || err instanceof AccountLimitError)) {
         // `login` has settled the store already; the OAuth path has not.
         if (get().isLoading) set({ isLoading: false, error: err.message });
         return err;

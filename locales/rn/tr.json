@@ -460,6 +460,7 @@
       "email_step_title": "E-posta adresiniz nedir?",
       "email_step_title_add": "Diğer adres nedir?",
       "email_title": "E-posta adresimi kullan",
+      "err_account_limit_detail": "Başka bir hesap eklemek için Ayarlar'dan bir hesabı kaldırın.",
       "err_bad_detail": "E-posta adresinizi ve parolanızı kontrol edin. Hesabınız iki aşamalı giriş kullanıyorsa webmail'de bir uygulama parolası oluşturun ve burada onu kullanın.",
       "err_bad_title": "Bu işe yaramadı",
       "err_cert_detail": "Sunucunun güvenlik sertifikası reddedildi. Bu sizin sunucunuzsa sertifikanın geçerli olduğunu ve süresinin dolmadığını kontrol edin.",

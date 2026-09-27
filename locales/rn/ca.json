@@ -460,6 +460,7 @@
       "email_step_title": "Quina és la vostra adreça electrònica?",
       "email_step_title_add": "Quina és l'altra adreça?",
       "email_title": "Utilitza la meva adreça electrònica",
+      "err_account_limit_detail": "Suprimiu un compte a la configuració per afegir-ne un altre.",
       "err_bad_detail": "Comproveu el correu electrònic i la contrasenya. Si el vostre compte utilitza l'autenticació de dos factors, creeu una contrasenya d'aplicació al webmail i utilitzeu-la aquí.",
       "err_bad_title": "No ha funcionat",
       "err_cert_detail": "S'ha rebutjat el certificat de seguretat del servidor. Si és el vostre propi servidor, comproveu que el certificat sigui vàlid i no hagi caducat.",

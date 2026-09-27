@@ -460,6 +460,7 @@
       "email_step_title": "Kāda ir jūsu e-pasta adrese?",
       "email_step_title_add": "Kāda ir otra adrese?",
       "email_title": "Izmantot manu e-pasta adresi",
+      "err_account_limit_detail": "Lai pievienotu citu kontu, noņemiet kādu kontu iestatījumos.",
       "err_bad_detail": "Pārbaudiet e-pasta adresi un paroli. Ja jūsu kontā tiek izmantota divpakāpju pierakstīšanās, izveidojiet lietotnes paroli tīmekļa pastā un izmantojiet to šeit.",
       "err_bad_title": "Tas neizdevās",
       "err_cert_detail": "Servera drošības sertifikāts tika noraidīts. Ja tas ir jūsu serveris, pārbaudiet, vai sertifikāts ir derīgs un tā termiņš nav beidzies.",

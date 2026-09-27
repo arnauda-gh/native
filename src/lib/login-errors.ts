@@ -5,6 +5,7 @@
 //
 // Errors are matched by `name` and message text rather than `instanceof` so
 // this module stays free of the api/ and expo dependency graph.
+import { MAX_ACCOUNTS } from './account-utils';
 
 export interface LoginErrorCopy {
   title: string;
@@ -221,8 +222,14 @@ export function describeLoginError(err: unknown, context: LoginErrorContext = {}
     };
   }
 
-  if (lower.includes('maximum of') && lower.includes('accounts')) {
-    return { title: message };
+  // No room for another account (AccountLimitError, or its message as the
+  // store keeps it).
+  if (name === 'AccountLimitError' || /maximum of \d+ accounts/i.test(message)) {
+    const count = Number(/maximum of (\d+)/i.exec(message)?.[1]) || MAX_ACCOUNTS;
+    return {
+      title: t('settings.account.accounts.limit', 'Maximum of {count} accounts reached.', { count }),
+      detail: t('login.mobile.err_account_limit_detail', 'Remove an account in Settings to add another one.'),
+    };
   }
 
   // Unrecognised: show what we were told rather than inventing a cause.

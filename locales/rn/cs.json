@@ -460,6 +460,7 @@
       "email_step_title": "Jaká je vaše e-mailová adresa?",
       "email_step_title_add": "Jaká je ta druhá adresa?",
       "email_title": "Použít moji e-mailovou adresu",
+      "err_account_limit_detail": "Chcete-li přidat další účet, odeberte některý v Nastavení.",
       "err_bad_detail": "Zkontrolujte e-mail a heslo. Pokud váš účet používá dvoufázové přihlášení, vytvořte ve webmailu heslo aplikace a použijte ho zde.",
       "err_bad_title": "To nevyšlo",
       "err_cert_detail": "Bezpečnostní certifikát serveru byl odmítnut. Pokud jde o váš vlastní server, zkontrolujte, zda je certifikát platný a nevypršel.",

@@ -460,6 +460,7 @@
       "email_step_title": "Hvad er din e-mailadresse?",
       "email_step_title_add": "Hvad er den anden adresse?",
       "email_title": "Brug min e-mailadresse",
+      "err_account_limit_detail": "Fjern en konto i Indstillinger for at tilføje en ny.",
       "err_bad_detail": "Tjek din e-mail og adgangskode. Hvis din konto bruger to-faktor-godkendelse, så opret en app-adgangskode i webmailen, og brug den her.",
       "err_bad_title": "Det virkede ikke",
       "err_cert_detail": "Serverens sikkerhedscertifikat blev afvist. Hvis det er din egen server, så tjek, at certifikatet er gyldigt og ikke udløbet.",

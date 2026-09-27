@@ -460,6 +460,7 @@
       "email_step_title": "Care este adresa dvs. de e-mail?",
       "email_step_title_add": "Care este cealaltă adresă?",
       "email_title": "Folosiți adresa mea de e-mail",
+      "err_account_limit_detail": "Eliminați un cont din Setări pentru a adăuga altul.",
       "err_bad_detail": "Verificați adresa de e-mail și parola. Dacă contul dvs. folosește autentificarea în doi pași, creați o parolă pentru aplicații în webmail și folosiți-o aici.",
       "err_bad_title": "Nu a funcționat",
       "err_cert_detail": "Certificatul de securitate al serverului a fost respins. Dacă este serverul dvs., verificați dacă certificatul este valid și nu a expirat.",

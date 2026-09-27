@@ -460,6 +460,7 @@
       "email_step_title": "Wat is uw e-mailadres?",
       "email_step_title_add": "Wat is het andere adres?",
       "email_title": "Mijn e-mailadres gebruiken",
+      "err_account_limit_detail": "Verwijder een account in Instellingen om er nog een toe te voegen.",
       "err_bad_detail": "Controleer uw e-mailadres en wachtwoord. Als uw account tweefactorauthenticatie gebruikt, maak dan in de webmail een app-wachtwoord aan en gebruik dat hier.",
       "err_bad_title": "Dat is niet gelukt",
       "err_cert_detail": "Het beveiligingscertificaat van de server is geweigerd. Als dit uw eigen server is, controleer dan of het certificaat geldig en niet verlopen is.",

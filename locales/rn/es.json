@@ -460,6 +460,7 @@
       "email_step_title": "¿Cuál es tu dirección de correo?",
       "email_step_title_add": "¿Cuál es la otra dirección?",
       "email_title": "Usar mi dirección de correo",
+      "err_account_limit_detail": "Elimina una cuenta en Ajustes para añadir otra.",
       "err_bad_detail": "Comprueba tu correo y tu contraseña. Si tu cuenta usa autenticación de dos factores, crea una contraseña de aplicación en el webmail y úsala aquí.",
       "err_bad_title": "No ha funcionado",
       "err_cert_detail": "Se rechazó el certificado de seguridad del servidor. Si es tu propio servidor, comprueba que el certificado sea válido y no haya caducado.",

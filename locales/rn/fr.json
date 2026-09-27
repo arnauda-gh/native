@@ -460,6 +460,7 @@
       "email_step_title": "Quelle est votre adresse e-mail ?",
       "email_step_title_add": "Quelle est l'autre adresse ?",
       "email_title": "Utiliser mon adresse e-mail",
+      "err_account_limit_detail": "Supprimez un compte dans les Paramètres pour en ajouter un autre.",
       "err_bad_detail": "Vérifiez votre adresse e-mail et votre mot de passe. Si votre compte utilise l'authentification à deux facteurs, créez un mot de passe d'application dans le webmail et utilisez-le ici.",
       "err_bad_title": "Cela n'a pas fonctionné",
       "err_cert_detail": "Le certificat de sécurité du serveur a été refusé. S'il s'agit de votre propre serveur, vérifiez que le certificat est valide et n'a pas expiré.",

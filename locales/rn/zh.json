@@ -460,6 +460,7 @@
       "email_step_title": "您的邮箱地址是什么？",
       "email_step_title_add": "另一个邮箱地址是什么？",
       "email_title": "使用我的邮箱地址",
+      "err_account_limit_detail": "请在设置中移除一个账户后再添加新账户。",
       "err_bad_detail": "请检查您的邮箱地址和密码。如果您的账户使用双因素身份验证登录，请在网页邮箱中创建应用密码并在此使用。",
       "err_bad_title": "无法登录",
       "err_cert_detail": "服务器的安全证书被拒绝。如果这是您自己的服务器，请检查证书是否有效且未过期。",

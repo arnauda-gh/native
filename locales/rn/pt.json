@@ -460,6 +460,7 @@
       "email_step_title": "Qual é o seu endereço de e-mail?",
       "email_step_title_add": "Qual é o outro endereço?",
       "email_title": "Usar meu endereço de e-mail",
+      "err_account_limit_detail": "Remova uma conta em Configurações para adicionar outra.",
       "err_bad_detail": "Verifique seu e-mail e sua senha. Se sua conta usa autenticação de dois fatores, crie uma senha de aplicativo no webmail e use-a aqui.",
       "err_bad_title": "Não funcionou",
       "err_cert_detail": "O certificado de segurança do servidor foi rejeitado. Se o servidor for seu, verifique se o certificado é válido e não expirou.",
