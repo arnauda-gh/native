@@ -122,8 +122,9 @@ async function ensureAccountFor(registryId: string): Promise<string> {
     await ensureAndroidAccount(name, registryId);
     return name;
   } catch (err) {
-    // The name belongs to another app account after all (the list was stale).
-    if (name === registryId) throw err;
+    // The name belongs to another app account after all (the list was stale). Any
+    // other failure fails the turn-on: a second account would show in the apps.
+    if (name === registryId || (err as { code?: unknown } | null)?.code !== 'conflict') throw err;
     await ensureAndroidAccount(registryId, registryId);
     return registryId;
   }

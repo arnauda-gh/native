@@ -43,7 +43,8 @@ vi.mock('../../native', () => ({
   ensureAndroidAccount: vi.fn(async (name: string, registryId: string) => {
     h.state.log.push(`ensure ${name}`);
     const existing = h.find(name);
-    if (existing && existing.registryId !== registryId) throw new Error('conflict');
+    // As the native module rejects (DeviceSyncAccounts.ensure → AccountConflictException).
+    if (existing && existing.registryId !== registryId) throw Object.assign(new Error(`${name} belongs to another app account`), { code: 'conflict' });
     if (existing) return false;
     h.state.accounts.push({ name, registryId, sync: {} });
     return true;
@@ -210,6 +211,18 @@ describe('enable', () => {
     h.state.accounts.push({ name: 'alice', registryId: ALICE2, sync: {} });
     const outcome = await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
     expect(outcome).toEqual({ kind: 'enabled', accountName: ALICE });
+  });
+
+  it('adds no second account named after the registry id when adding the account fails for another reason', async () => {
+    for (const code of ['failed', 'permission']) {
+      vi.mocked(native.ensureAndroidAccount).mockClear();
+      vi.mocked(native.ensureAndroidAccount).mockRejectedValueOnce(Object.assign(new Error(`AccountManager said no (${code})`), { code }));
+      const outcome = await enableDeviceSync(ALICE, CONTACTS_AUTHORITY);
+      expect(outcome).toEqual({ kind: 'failed', message: `AccountManager said no (${code})` });
+      expect(native.ensureAndroidAccount).toHaveBeenCalledTimes(1);
+      expect(h.state.accounts).toEqual([]);
+      expect(accountDeviceSync(ALICE).androidAccountName).toBeUndefined();
+    }
   });
 
   it('leaves no account behind when turning sync on fails', async () => {
