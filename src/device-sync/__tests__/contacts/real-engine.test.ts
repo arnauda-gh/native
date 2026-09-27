@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { Data, Groups, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
-import { addServerCards, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
+import { addServerCards, ANDROID_ACCOUNT, CONTACTS_AUTHORITY, createHarness, rowWrites, type Harness } from '../engine/harness';
 import type { SetTarget } from '../fakes/fake-jmap-server';
 import { JPEG } from './fixtures';
 import { thumbnailOnlyPort } from './harness';
@@ -78,6 +78,21 @@ describe('contacts through the engine', () => {
     expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();
     // Turning sync off finds nothing waiting.
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
+  it('puts a contact created on the device into the group it was added to', async () => {
+    const h = real();
+    const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { other: true }, addressBookIds: { [h.book]: true } });
+    expect((await h.run()).outcome).toBe('ok');
+    const id = h.device.user.insertContact(ANDROID_ACCOUNT, [
+      { [Data.MIMETYPE]: MimeType.STRUCTURED_NAME, [Data.DATA1]: 'New Person' },
+      { [Data.MIMETYPE]: MimeType.GROUP_MEMBERSHIP, [Data.DATA1]: Number(h.device.rows('groups')[0]._id) },
+    ]);
+
+    expect(await h.run()).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1, updated: 1 } } });
+    const uid = h.server.all('ContactCard', 'a').find((c) => c.kind !== 'group')!.uid as string;
+    expect(h.server.get('ContactCard', 'a', group)?.members).toEqual({ other: true, [uid]: true });
+    expect(memberships(h, id)).toHaveLength(1);
   });
 
   it('keeps one row for a small photo the provider stores as its thumbnail, and never deletes it on the server', async () => {

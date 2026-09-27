@@ -280,7 +280,9 @@ export function planContactAccepted(local: LocalContact, server: ContactCardWire
   }
   const identity = objectRef(accountOf(local, ctx), server.id);
   const raw = { [RawContacts.SOURCE_ID]: identity, [RawContacts.SYNC3]: null, [RawContacts.SYNC4]: null };
-  const write = cleanWrite(local, server, ctx, { assertDirty: null, clearDirty: true, accepted: true, raw });
+  // Just created: the groups it was put in on the device are all still to upload.
+  const memberBase = local.shadow ? undefined : [];
+  const write = cleanWrite(local, server, ctx, { assertDirty: null, clearDirty: true, accepted: true, raw, memberBase });
   const ops = group(local, write.ops.length ? write.ops : [assertContact(local, null)]);
   ops.ref = identity;
 

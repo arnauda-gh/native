@@ -239,6 +239,8 @@ export interface CleanWriteOptions {
   raw?: WriteRow;
   /** The rows' changes were just uploaded (planAccepted): a changed photo is the server's now. */
   accepted?: boolean;
+  /** The memberships the rows held at the last write, when there is no shadow to say: a new contact's are none. */
+  memberBase?: string[];
 }
 
 /** The JMAP account a local contact belongs to. */
@@ -260,7 +262,7 @@ export function cleanWrite(local: LocalContact, card: ContactCardWire, ctx: Ctx,
   const rows = cleanRows(local, remote, keyMap, base, options.accepted ?? false);
   const members = planMemberships({
     rows: local.rows,
-    base: shadowMemberOf(local.shadow),
+    base: shadowMemberOf(local.shadow) ?? options.memberBase ?? null,
     remote: remoteMemberships(server, ctx),
     evidence: rows.evidence,
     restore: true,

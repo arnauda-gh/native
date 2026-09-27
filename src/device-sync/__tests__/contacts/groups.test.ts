@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Data, Groups, MimeType } from '../../android-columns';
 import type { ContactCardWire, OpGroup, UploadPlan } from '../../planner';
 import { appleCard, googleCard } from './fixtures';
-import { Harness, JMAP } from './harness';
+import { ACCOUNT, Harness, JMAP } from './harness';
 
 function actionsOf(plan: UploadPlan<ContactCardWire>) {
   if (plan.kind !== 'upload') throw new Error(`expected an upload, got ${plan.kind}`);
@@ -128,6 +128,28 @@ describe('contacts groups: membership edits', () => {
     expect(h.planner.planGroupUpload(await localGroup(h, gid), h.ctx)).toEqual({
       kind: 'upload', actions: [{ kind: 'update', id: gid, patch: { 'name/full': 'Colleagues' } }],
     });
+  });
+
+  it('keeps the groups of a contact created on the device and adds it to their cards', async () => {
+    const h = new Harness();
+    const gid = h.addCard({ uid: 'urn:uuid:g7', kind: 'group', name: { full: 'Team' }, members: { 'urn:uuid:someone': true } });
+    await h.download(gid);
+    const g = await localGroup(h, gid);
+    const rawId = h.device.user.insertContact(ACCOUNT, [
+      { [Data.MIMETYPE]: MimeType.STRUCTURED_NAME, data1: 'New Person', data2: 'New', data3: 'Person' },
+      { [Data.MIMETYPE]: MimeType.GROUP_MEMBERSHIP, [Data.DATA1]: g.groupId },
+    ]);
+    await h.upload(rawId);
+    expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
+    expect(h.dirty(rawId)).toBe(true);
+    const uid = (await h.contact(rawId)).shadow!.uid as string;
+    const actions = h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx);
+    expect(actions).toEqual([{ kind: 'update', id: gid, patch: { [`members/${uid}`]: true } }]);
+    h.send(actions);
+    await h.applyOk(h.planner.planGroupAccepted(g, h.card(gid), h.ctx).ops);
+    await h.upload(rawId);
+    expect(h.dirty(rawId)).toBe(false);
+    expect(h.membershipGroups(rawId)).toEqual([`${JMAP}/${gid}`]);
   });
 
   it('sends the whole map for the first member of an empty group', async () => {
