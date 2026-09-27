@@ -23,6 +23,8 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       # Fail in seconds instead of after a 20-minute build. There is no
       # unsigned or debug-signed fallback: anything signed with the debug key
@@ -249,6 +251,7 @@ jobs:
           SRC=android/app/build/outputs/apk/release/app-release.apk
           DEST="bulwark-mobile-${VERSION}-${GITHUB_SHA::7}.apk"
           cp "$SRC" "$DEST"
+          sha256sum "$DEST" > "$DEST.sha256"
 
           MAPPING_SRC=android/app/build/outputs/mapping/release/mapping.txt
           MAPPING=""
@@ -266,9 +269,17 @@ jobs:
           {
             echo "files<<FILES_EOF"
             echo "$DEST"
+            echo "$DEST.sha256"
             if [ -n "$MAPPING" ]; then echo "$MAPPING"; fi
             echo "FILES_EOF"
           } >> "$GITHUB_OUTPUT"
+
+      # Ties the APK to this commit and workflow run, which the signing key
+      # alone does not: `gh attestation verify <apk> --repo bulwarkmail/native`.
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.artifact.outputs.path }}
 
       - uses: actions/upload-artifact@v4
         with:
