@@ -57,6 +57,8 @@ export interface Kind<L = any, O extends ServerObject = any> {
   planBaselineHeal(local: L): OpGroup | null;
   planUpload(local: L, jmapAccountId: string): UploadPlan<O>;
   planAccepted(local: L, server: O, jmapAccountId: string): AcceptedPlan;
+  /** The item without its pending create, so `planUpload` claims it again; absent when the target can't change. */
+  unclaimed?(local: L): L;
 }
 
 export function refOf(jmapAccountId: string, id: string): string {

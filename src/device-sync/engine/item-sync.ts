@@ -155,6 +155,10 @@ export abstract class ItemSync {
   protected claimable(_held: Held): boolean {
     return true;
   }
+  /** Whether a collection key names a collection its account no longer has (listed this run). */
+  protected collectionGone(_key: string): boolean {
+    return false;
+  }
   /** The JMAP account an item uploads to. */
   protected accountOfItem(held: Held): string | null {
     const meta = held.kind.meta(held.local);
@@ -792,12 +796,18 @@ export abstract class ItemSync {
     return this.setStates.get(acct) ?? null;
   }
 
-  /** New items get their uid and target written before anything is sent. */
+  /**
+   * New items get their uid and target written before anything is sent. A
+   * claim whose collection is gone from the server is made again where the
+   * kind allows it (contacts: nothing of it can exist in a deleted book).
+   */
   private async claimNewItems(): Promise<void> {
     const works: Work[] = [];
     for (const held of await this.loadUploadItems()) {
       const meta = held.kind.meta(held.local);
-      if (!meta.isNew || meta.pending || meta.deleted || !this.claimable(held)) continue;
+      if (!meta.isNew || meta.deleted || !this.claimable(held)) continue;
+      const reclaim = !!meta.pending && !!held.kind.unclaimed && this.collectionGone(meta.pending.target);
+      if (meta.pending && !reclaim) continue;
       const ref = `row:${meta.rowId}`;
       const acct = this.claimAccount(held);
       if (!acct) {
@@ -807,7 +817,7 @@ export abstract class ItemSync {
       }
       let plan;
       try {
-        plan = held.kind.planUpload(held.local, acct);
+        plan = held.kind.planUpload(reclaim ? held.kind.unclaimed!(held.local) : held.local, acct);
       } catch (error) {
         this.plannerFailed(acct, ref, 'upload', error);
         continue;
@@ -913,6 +923,12 @@ export abstract class ItemSync {
     if (this.isStale(acct, meta.sourceId)) {
       report.stats.skipped++;
       report.itemError({ ref, side: 'upload', type: 'stale', description: 'Waits until the server version could be stored' });
+      return null;
+    }
+    if (meta.isNew && !meta.deleted && meta.pending && this.collectionGone(meta.pending.target)) {
+      // Nothing can be created there (an event stays in its calendar until the user moves it).
+      report.stats.skipped++;
+      report.itemError({ ref, side: 'upload', type: 'collectionGone', description: `${meta.pending.target} no longer exists on the server` });
       return null;
     }
     const fingerprint = kind.fingerprint(local);

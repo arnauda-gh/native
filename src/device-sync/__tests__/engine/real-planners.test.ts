@@ -235,6 +235,55 @@ describe('device sync engine with the real planners', () => {
     });
   });
 
+  describe('a create whose target the server deleted after the claim', () => {
+    it('claims a new contact again for a book that exists', async () => {
+      const h = real();
+      const work = h.server.addAddressBook('a', { name: 'Work' });
+      h.prefs.newContactsAddressBook = `a/${work}`;
+      await h.run();
+      const id = addDeviceContact(h, 'Hedy Lamarr');
+      // The claim names Work, the create is lost; then another client deletes Work.
+      h.server.failNextRequest('network', { match: 'ContactCard/set' });
+      expect((await h.run()).outcome).toBe('io');
+      h.server.serverDestroy('AddressBook', 'a', work);
+
+      const report = await h.run();
+
+      expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1 } } });
+      const hedy = h.server.all('ContactCard', 'a').find((c) => (c.name as { full?: string }).full === 'Hedy Lamarr')!;
+      expect(hedy.addressBookIds).toEqual({ [h.book]: true });
+      expect(h.contacts().find((c) => c.id === id)).toMatchObject({ sourceId: `a/${hedy.id}`, dirty: false });
+      expect(h.contacts().find((c) => c.id === id)!.row.sync4).toBeNull();
+    });
+
+    it('keeps a new event whose calendar is gone, without poisoning it, until the user moves it', async () => {
+      const h = real();
+      const work = h.server.addCalendar('a', { name: 'Work' });
+      await h.run(CALENDAR_AUTHORITY);
+      const rowOf = (calendarId: string) => Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${calendarId}`)!._id);
+      const workRow = rowOf(work);
+      const dentist = { title: 'Dentist', dtstart: Date.UTC(2026, 9, 1, 8), dtend: Date.UTC(2026, 9, 1, 9), eventTimezone: 'Europe/Berlin' };
+      const id = h.device.user.insertEvent(workRow, dentist);
+      h.server.failNextRequest('network', { match: 'CalendarEvent/set' });
+      expect((await h.run(CALENDAR_AUTHORITY)).outcome).toBe('io');
+      h.server.serverDestroy('Calendar', 'a', work);
+
+      const report = await h.run(CALENDAR_AUTHORITY);
+
+      expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `row:${id}`, type: 'collectionGone' })]);
+      expect(h.server.all('CalendarEvent', 'a')).toEqual([]);
+      expect(h.events().find((e) => Number(e._id) === id)).toMatchObject({ title: 'Dentist', sync_data5: null });
+
+      // The user moves it to the personal calendar (Etar: delete + insert).
+      h.device.user.deleteEvent(id);
+      h.device.user.insertEvent(rowOf(h.calendar), dentist);
+      expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', itemErrors: [] });
+
+      expect(h.server.all('CalendarEvent', 'a').map((e) => [e.title, e.calendarIds])).toEqual([['Dentist', { [h.calendar]: true }]]);
+      expect(h.device.rows('calendars').map((c) => c._sync_id)).toEqual([`a/${h.calendar}`]);
+    });
+  });
+
   describe('a device edit of an object the server moved out of every synced collection', () => {
     /** Ada with two numbers in the synced book; the device deletes the second in place (AOSP). */
     async function adaWithDeletedNumber() {

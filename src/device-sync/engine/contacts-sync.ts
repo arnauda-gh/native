@@ -172,6 +172,7 @@ export class ContactsSync extends ItemSync {
       planBaselineHeal: (c) => planner.planBaselineHeal(c),
       planUpload: (c, acct) => planner.planUpload(c, this.ctx(acct)),
       planAccepted: (c, card, acct) => planner.planAccepted(c, card, this.ctx(acct)),
+      unclaimed: (c) => ({ ...c, pending: null }),
     };
   }
 
@@ -205,6 +206,7 @@ export class ContactsSync extends ItemSync {
       planBaselineHeal: () => null,
       planUpload: (g, acct) => planner.planGroupUpload(g, this.ctx(acct)),
       planAccepted: (g, card, acct) => planner.planGroupAccepted(g, card, this.ctx(acct)),
+      unclaimed: (g) => ({ ...g, pending: null }),
     };
   }
 
@@ -282,6 +284,12 @@ export class ContactsSync extends ItemSync {
   private writable(key: string): boolean {
     const book = this.book(key);
     return !!book && book.myRights?.mayWrite !== false;
+  }
+
+  protected collectionGone(key: string): boolean {
+    const parsed = parseCollectionKey(key);
+    const books = parsed ? this.books.get(parsed.accountId) : undefined;
+    return !!books && !books.some((b) => b.id === parsed!.id);
   }
 
   protected async collections(write: boolean): Promise<void> {

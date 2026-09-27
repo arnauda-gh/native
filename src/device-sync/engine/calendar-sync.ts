@@ -257,6 +257,12 @@ export class CalendarSync extends ItemSync {
     await this.refreshCalendarRows();
   }
 
+  protected collectionGone(key: string): boolean {
+    const parsed = parseCollectionKey(key);
+    const list = parsed ? this.calendars.get(parsed.accountId) : undefined;
+    return !!list && !list.some((c) => c.id === parsed!.id);
+  }
+
   protected syncedCollections(acct: string): string[] {
     return (this.calendars.get(acct) ?? [])
       .filter((c) => this.syncedKeys.has(collectionKey(acct, c.id)))
