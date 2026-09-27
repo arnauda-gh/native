@@ -110,6 +110,30 @@ describe('device sync engine: collections loaded or dropped in part', () => {
     expect(h.contacts().map((c) => c.name)).toEqual(['Ada']);
   });
 
+  it('downloads every card of a book selected while a first sync was cut short', async () => {
+    const h = createHarness();
+    const extra = h.server.addAddressBook('a', { name: 'Friends' });
+    const friends = addServerCards(h, Array.from({ length: 10 }, (_, i) => `F${i}`), 'a', extra);
+    addServerCards(h, Array.from({ length: 120 }, (_, i) => `P${String(i).padStart(3, '0')}`));
+    h.prefs.contactsSelection[`a/${extra}`] = false;
+    // The first sync (a full reconcile): 'reconcile', 'reconcile:ids', 'reconcile:objects': out of time after chunk 1.
+    outOfTimeAt(h, 3);
+    expect((await h.run()).outcome).toBe('cancelled');
+    h.checkpoints.onCheckpoint = undefined;
+    const marker = h.state()!.accounts.a.reconcile!;
+    expect(friends.filter((id) => id <= (marker.after as string)).length).toBeGreaterThan(0);
+
+    // The user turns Friends on before the next sync.
+    h.prefs.contactsSelection[`a/${extra}`] = true;
+    expect((await h.run()).outcome).toBe('ok');
+
+    const onDevice = new Set(h.contacts().map((c) => c.sourceId));
+    expect(friends.filter((id) => !onDevice.has(`a/${id}`))).toEqual([]);
+    expect(h.contacts()).toHaveLength(130);
+    expect(h.state()!.accounts.a).toMatchObject({ reconcile: null });
+    expect(h.state()!.accounts.a.selected.sort()).toEqual([`a/${h.book}`, `a/${extra}`].sort());
+  });
+
   it('loads the events of a calendar dropped by a stopped run when it is selected again', async () => {
     const h = real();
     const holidays = h.server.addCalendar('a', { name: 'Holidays' });

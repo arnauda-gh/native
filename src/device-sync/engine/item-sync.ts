@@ -404,10 +404,11 @@ export abstract class ItemSync {
    */
   protected async fullReconcile(acct: string): Promise<void> {
     let marker = this.env.store.account(acct).reconcile;
+    const synced = this.syncedCollections(acct);
     if (!marker?.from) {
       await this.env.checkpoints.check('reconcile');
       const from = await this.env.jmap.takeState(this.itemType, acct);
-      const started = { from, phase: 'ids' as const, position: 0, after: null };
+      const started = { from, phase: 'ids' as const, position: 0, after: null, collections: synced.map((c) => collectionKey(acct, c)) };
       await this.env.writer.write([], this.tail([acct], (next) => {
         accountOf(next, acct).reconcile = { ...started };
       }));
@@ -415,7 +416,10 @@ export abstract class ItemSync {
     }
     const from = marker.from as string;
     await this.beforeReconcile(acct);
-    const collections = this.syncedCollections(acct);
+    // A resumed reconcile lists the collections it started with (their ids up to `after` are done):
+    // one selected since then is loaded afterwards, from its first id.
+    const keys = marker.collections;
+    const collections = keys ? synced.filter((c) => keys.includes(collectionKey(acct, c))) : synced;
     const listed = new Set<string>();
     for (const collection of collections) {
       await this.env.checkpoints.check('reconcile:ids');
@@ -441,7 +445,7 @@ export abstract class ItemSync {
       await this.env.checkpoints.check('reconcile:objects');
       const part = todo.slice(i, i + size);
       position += part.length;
-      const mark = { from, phase: 'objects' as const, position, after: part[part.length - 1] };
+      const mark = { from, phase: 'objects' as const, position, after: part[part.length - 1], ...(keys ? { collections: keys } : {}) };
       await this.processChunk(acct, part, [], (next) => {
         accountOf(next, acct).reconcile = { ...mark };
       });

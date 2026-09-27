@@ -18,6 +18,8 @@ export interface ReconcileMarker {
   position: number;
   /** The last id processed in that (sorted) order: a resumed reconcile continues after it. */
   after: string | null;
+  /** Keys of the collections the reconcile lists; one selected since is loaded after it. Absent: every synced one. */
+  collections?: string[];
 }
 
 export interface AccountState {
@@ -74,12 +76,14 @@ const stringOrNull = (value: unknown): string | null => (typeof value === 'strin
 function parseReconcile(value: unknown): ReconcileMarker | null {
   if (!value || typeof value !== 'object') return null;
   const r = value as Record<string, unknown>;
-  return {
+  const marker: ReconcileMarker = {
     from: stringOrNull(r.from),
     phase: r.phase === 'objects' ? 'objects' : 'ids',
     position: typeof r.position === 'number' && r.position >= 0 ? r.position : 0,
     after: stringOrNull(r.after),
   };
+  if (Array.isArray(r.collections)) marker.collections = strings(r.collections);
+  return marker;
 }
 
 function parseAccount(value: unknown): AccountState {
