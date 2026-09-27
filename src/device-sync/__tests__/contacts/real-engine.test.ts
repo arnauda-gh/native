@@ -81,6 +81,27 @@ describe('contacts through the engine', () => {
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
   });
 
+  it('puts back a membership in a group of a read-only book, so no change waits for ever', async () => {
+    const h = real();
+    const shared = h.server.addAddressBook('a', { name: 'Shared', myRights: { mayRead: true, mayWrite: false, mayShare: false, mayDelete: false } });
+    h.prefs.contactsSelection[`a/${shared}`] = true;
+    const team = h.server.addCard('a', { uid: 'g-team', kind: 'group', name: { full: 'Team' }, members: { other: true }, addressBookIds: { [shared]: true } });
+    addServerCards(h, ['Ada Lovelace']);
+    expect((await h.run()).outcome).toBe('ok');
+
+    const ada = h.contactNamed('Ada Lovelace')!.id;
+    h.device.user.addToGroup(ada, Number(h.device.rows('groups').find((g) => g.sourceid === `a/${team}`)!._id));
+    const report = await h.run();
+
+    expect(report).toMatchObject({ outcome: 'ok', stats: { skipped: 1 } });
+    expect(report.itemErrors).toEqual([expect.objectContaining({ side: 'upload', type: 'groupNotWritable' })]);
+    expect(h.contactNamed('Ada Lovelace')).toMatchObject({ dirty: false });
+    expect(memberships(h, ada)).toEqual([]);
+    expect(h.server.get('ContactCard', 'a', team)?.members).toEqual({ other: true });
+    // Turning sync off finds nothing waiting.
+    expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
   it('puts a contact created on the device into the group it was added to', async () => {
     const h = real();
     const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { other: true }, addressBookIds: { [h.book]: true } });

@@ -6,7 +6,6 @@
  */
 import { Data, GroupMembership, Groups, RawContacts } from '../../android-columns';
 import { makeKeyMinter, parseObjectRef, uuidFrom } from '../../common/ids';
-import type { GroupRights } from '../../contacts/members';
 import { contactsPlanner } from '../../contacts/planner';
 import type {
   ContactCardWire,
@@ -85,7 +84,7 @@ export class Harness {
   groupIndex = true;
   /** When true the photos the planner writes come out thumbnail-only (see `keepThumbnailsOnly`). */
   thumbnailPhotos = false;
-  readonly ctx: ContactsContext & GroupRights;
+  readonly ctx: ContactsContext;
 
   constructor() {
     this.server.addAccount(JMAP, { name: ACCOUNT });
@@ -126,10 +125,10 @@ export class Harness {
   }
 
   /** The context as the engine may build it without a group index. */
-  context(): ContactsContext & GroupRights {
+  context(): ContactsContext {
     if (this.groupIndex) return this.ctx;
     const { groupsOf: _drop, ...rest } = this.ctx;
-    return rest as ContactsContext & GroupRights;
+    return rest as ContactsContext;
   }
 
   async apply(group: OpGroup): Promise<BatchResult> {

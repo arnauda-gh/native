@@ -189,6 +189,12 @@ export interface ContactsContext extends MapContext {
    * it; without it the planner leaves memberships as they are.
    */
   groupsOf?(uid: string): string[];
+  /**
+   * Whether a synced group card (by SOURCE_ID) is in read-only address books
+   * only, so the device may not change its members. The engine provides it
+   * from the group rows' shadows; without it every group counts as writable.
+   */
+  groupReadOnly?(sourceId: string): boolean;
 }
 
 export interface ContactsPlanner {

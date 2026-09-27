@@ -28,20 +28,12 @@ import { NO_PHOTO } from './photo';
 import { MEMBER_OF, type Unit } from './project';
 
 /**
- * Group rights the engine can add to the context (not part of
- * ContactsContext yet): whether a group card, by SOURCE_ID, is in read-only
- * address books only. Without it every synced group counts as writable.
- */
-export interface GroupRights {
-  groupReadOnly?(sourceId: string): boolean;
-}
-
-/**
  * The groups whose members an upload for a contact of `account` can change:
- * that account's groups outside read-only books. A membership change of any
- * other group can never reach the server (`planMembershipUploads` skips it).
+ * that account's groups outside read-only books (`groupReadOnly`). A
+ * membership change of any other group can never reach the server
+ * (`planMembershipUploads` skips it).
  */
-export function editableGroups(ctx: ContactsContext & GroupRights, account: string): (sourceId: string) => boolean {
+export function editableGroups(ctx: ContactsContext, account: string): (sourceId: string) => boolean {
   return (sourceId) => parseObjectRef(sourceId)?.accountId === account && !(ctx.groupReadOnly?.(sourceId) ?? false);
 }
 

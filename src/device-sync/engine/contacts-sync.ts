@@ -112,6 +112,8 @@ export class ContactsSync extends ItemSync {
   /** Group SOURCE_ID → Groups row id, and member uid → group SOURCE_IDs; rebuilt after group writes. */
   private readonly groupRows = new Map<string, number>();
   private readonly membership = new Map<string, Set<string>>();
+  /** Group SOURCE_IDs whose cards are in read-only address books only: the device may not change their members. */
+  private readonly readOnlyGroups = new Set<string>();
   private groupsStale = true;
   /** Per account: group refs that appeared (true) or went (false), for `SyncState.groups`. */
   private readonly groupChanges = new Map<string, Map<string, boolean>>();
@@ -255,13 +257,16 @@ export class ContactsSync extends ItemSync {
     return rows.map((r) => this.planner.decodeGroup(r));
   }
 
-  /** Group rows by SOURCE_ID and who is a member of which group, from the group cards' shadows. */
+  /** Group rows by SOURCE_ID, who is a member of which group, and which groups are read-only, from the group cards' shadows. */
   private async refreshGroups(): Promise<void> {
     this.groupRows.clear();
     this.membership.clear();
+    this.readOnlyGroups.clear();
     for (const group of await this.loadGroupsWhere()) {
       if (!group.sourceId || group.deleted) continue;
       this.groupRows.set(group.sourceId, group.groupId);
+      const keys = this.cardKeys(accountOfRef(group.sourceId), group.shadow);
+      if (keys.length > 0 && keys.every((k) => this.book(k)?.myRights?.mayWrite === false)) this.readOnlyGroups.add(group.sourceId);
       for (const uid of onIds(group.shadow?.members as Record<string, boolean> | undefined)) {
         let set = this.membership.get(uid);
         if (!set) this.membership.set(uid, (set = new Set()));
@@ -379,6 +384,7 @@ export class ContactsSync extends ItemSync {
       nameForUid: (uid) => this.uidNames?.get(uid) ?? null,
       groupRowIdBySourceId: (sourceId) => this.groupRows.get(sourceId) ?? null,
       groupsOf: (uid) => [...(this.membership.get(uid) ?? [])],
+      groupReadOnly: (sourceId) => this.readOnlyGroups.has(sourceId),
     };
   }
 
