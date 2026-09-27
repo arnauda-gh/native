@@ -193,12 +193,17 @@ export function planGroupAccepted(local: LocalGroup, server: ContactCardWire, ct
   const identity = objectRef(account, server.id);
   const raw: WriteRow = { [Groups.SOURCE_ID]: identity, [Groups.SYNC3]: null, [Groups.SYNC4]: null, ...cardColumns(server, ctx) };
   const title = groupTitle(server);
+  const keepDirtyOps = { ref: identity, ops: [updateGroup(local, raw)] };
+  // A rename the server still lacks (the upload it accepted was another one, a membership
+  // patch) stays the device's: title and DIRTY are kept, and it uploads against the new shadow.
+  const shadowTitle = groupTitle(local.shadow);
+  const renamed = local.dirty && !!local.title?.trim() && !sameCell(local.title, shadowTitle);
+  if (renamed && sameCell(title, shadowTitle)) {
+    return { ops: { ref: identity, ops: [assertGroup(local, null), updateGroup(local, raw)] }, keepDirtyOps };
+  }
   const ops: WriteRow = { ...raw, [Groups.DIRTY]: 0 };
   if (!sameCell(local.title, title)) ops[Groups.TITLE] = title ?? '';
-  return {
-    ops: { ref: identity, ops: [assertGroup(local, null), updateGroup(local, ops)] },
-    keepDirtyOps: { ref: identity, ops: [updateGroup(local, raw)] },
-  };
+  return { ops: { ref: identity, ops: [assertGroup(local, null), updateGroup(local, ops)] }, keepDirtyOps };
 }
 
 /**

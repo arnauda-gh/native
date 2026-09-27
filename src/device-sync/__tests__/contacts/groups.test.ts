@@ -111,6 +111,25 @@ describe('contacts groups: membership edits', () => {
     expect(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx)).toEqual([]);
   });
 
+  it('keeps a rename the server does not have when a membership patch of the group is accepted', async () => {
+    const h = new Harness();
+    const gid = h.addCard({ uid: 'urn:uuid:g2', kind: 'group', name: { full: 'Work' }, members: { 'urn:uuid:someone': true } });
+    await h.download(gid);
+    const { rawId } = await h.seed(appleCard());
+    const g = await localGroup(h, gid);
+    h.device.user.addToGroup(rawId, g.groupId);
+    await h.upload(rawId);
+    // Renamed after the group's own upload was planned, before the membership phase read it.
+    h.device.user.updateGroup(g.groupId, { [Groups.TITLE]: 'Colleagues' });
+    const read = await localGroup(h, gid);
+    h.send(h.planner.planMembershipUploads([await h.contact(rawId)], await h.groups(), h.ctx));
+    await h.applyOk(h.planner.planGroupAccepted(read, h.card(gid), h.ctx).ops);
+    expect(await localGroup(h, gid)).toMatchObject({ title: 'Colleagues', dirty: true, shadow: { members: { [appleCard().uid as string]: true } } });
+    expect(h.planner.planGroupUpload(await localGroup(h, gid), h.ctx)).toEqual({
+      kind: 'upload', actions: [{ kind: 'update', id: gid, patch: { 'name/full': 'Colleagues' } }],
+    });
+  });
+
   it('sends the whole map for the first member of an empty group', async () => {
     const h = new Harness();
     const empty = h.addCard({ uid: 'urn:uuid:g3', kind: 'group', name: { full: 'Empty' } });

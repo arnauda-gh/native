@@ -3,10 +3,11 @@
 // themselves are tested in the other files of this folder.
 
 import { describe, expect, it } from 'vitest';
-import { MimeType } from '../../android-columns';
+import { Groups, MimeType } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
 import { addServerCards, CONTACTS_AUTHORITY, createHarness, type Harness } from '../engine/harness';
+import type { SetTarget } from '../fakes/fake-jmap-server';
 
 function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
   const h = createHarness(options);
@@ -75,5 +76,29 @@ describe('contacts through the engine', () => {
     expect(h.server.get('ContactCard', 'team', team)?.members).toBeUndefined();
     // Turning sync off finds nothing waiting.
     expect(await h.teardown(CONTACTS_AUTHORITY)).toEqual({ pending: 0 });
+  });
+
+  it('keeps a group rename the server refused when a membership patch of that group goes through', async () => {
+    const h = real();
+    const [ada] = addServerCards(h, ['Ada Lovelace']);
+    const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { other: true }, addressBookIds: { [h.book]: true } });
+    expect((await h.run()).outcome).toBe('ok');
+    const row = () => h.device.rows('groups').find((g) => g.sourceid === `a/${group}`)!;
+    const groupId = Number(row()._id);
+    h.device.user.updateGroup(groupId, { [Groups.TITLE]: 'Best friends' });
+    h.device.user.addToGroup(h.contactNamed('Ada Lovelace')!.id, groupId);
+    const rename = (t: SetTarget) => t.op === 'update' && t.id === group && !!t.object && 'name/full' in t.object;
+    h.server.setErrorFor('ContactCard', 'a', rename, { type: 'invalidProperties', properties: ['name'] });
+
+    const report = await h.run();
+    expect(report.itemErrors).toMatchObject([{ ref: `a/${group}`, type: 'invalidProperties' }]);
+    const uid = h.server.get('ContactCard', 'a', ada)!.uid as string;
+    expect(h.server.get('ContactCard', 'a', group)).toMatchObject({ name: { full: 'Friends' }, members: { other: true, [uid]: true } });
+    expect(row()).toMatchObject({ [Groups.TITLE]: 'Best friends', [Groups.DIRTY]: 1 });
+
+    // The rename is still the device's and goes up once the server takes it.
+    expect((await h.run()).outcome).toBe('ok');
+    expect(h.server.get('ContactCard', 'a', group)).toMatchObject({ name: { full: 'Best friends' } });
+    expect(row()).toMatchObject({ [Groups.TITLE]: 'Best friends', [Groups.DIRTY]: 0 });
   });
 });
