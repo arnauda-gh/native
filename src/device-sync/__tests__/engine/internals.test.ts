@@ -297,6 +297,19 @@ describe('JMAP side', () => {
     expect(accountsWithCapability(session, JMAP_CALENDARS).map((a) => a.id)).toEqual(['a']);
   });
 
+  it("counts only the capability's primary account as personal, like the app's chooser", () => {
+    const server = new FakeJmapServer();
+    server.addAccount('a', { name: 'alice@example.com' });
+    // Another account the server calls personal (a second mailbox of the same login, say).
+    server.addAccount('home', { name: 'alice-home@example.com', isPersonal: true });
+    const session = server.port().session();
+
+    expect(accountsWithCapability(session, JMAP_CONTACTS).map((a) => [a.id, a.primary, a.personal])).toEqual([
+      ['a', true, true],
+      ['home', false, false],
+    ]);
+  });
+
   it('takes the login as the owner address and survives a server without identities', async () => {
     const server = new FakeJmapServer();
     server.addAccount('a', { name: 'Alice@Example.com' });

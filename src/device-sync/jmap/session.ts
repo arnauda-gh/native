@@ -12,7 +12,11 @@ export interface CapabilityAccount {
   name: string;
   /** The capability's primary account (the user's own). */
   primary: boolean;
-  /** Collections of personal accounts are selected by default, shared ones are not. */
+  /**
+   * Collections of the personal account are selected by default, those of the others are not. It is the
+   * capability's primary account only, whatever `isPersonal` says: one rule with the app's chooser and
+   * reminder filter, which know only the primary account per authority.
+   */
   personal: boolean;
   readOnly: boolean;
 }
@@ -31,7 +35,7 @@ export function accountsWithCapability(session: JmapSessionView, capability: str
       id,
       name: account.name || id,
       primary: isPrimary,
-      personal: isPrimary || account.isPersonal,
+      personal: isPrimary,
       readOnly: !!account.isReadOnly,
     });
   };
