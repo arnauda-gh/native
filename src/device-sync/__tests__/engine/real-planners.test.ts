@@ -185,6 +185,24 @@ describe('device sync engine with the real planners', () => {
       const uid = h.server.get('ContactCard', 'a', ada)!.uid as string;
       expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [uid]: true });
     });
+
+    it('uploads a removal from a group in a run that downloads no contact', async () => {
+      const h = real();
+      // A keyed phone row shows the editor works in place, so a missing membership row is a removal.
+      h.server.addCard('a', { uid: 'ada-uid', name: { full: 'Ada Lovelace' }, phones: { p1: { '@type': 'Phone', number: '+1 111' } } });
+      const group = h.server.addCard('a', { uid: 'g1', kind: 'group', name: { full: 'Friends' }, members: { 'ada-uid': true } });
+      await h.run();
+      const contact = h.contactNamed('Ada Lovelace')!;
+      const membership = h.device.rows('data').find((d) => Number(d.raw_contact_id) === contact.id && d.mimetype === MimeType.GROUP_MEMBERSHIP)!;
+      h.device.user.deleteData(Number(membership._id));
+
+      // The upload sync Android requests after the edit: the server has nothing new.
+      expect((await h.run(CONTACTS_AUTHORITY, { upload: true })).outcome).toBe('ok');
+
+      expect(h.server.get('ContactCard', 'a', group)!.members ?? {}).toEqual({});
+      expect(h.contacts().find((c) => c.id === contact.id)).toMatchObject({ dirty: false });
+      expect(h.device.rows('data').filter((d) => d.mimetype === MimeType.GROUP_MEMBERSHIP)).toEqual([]);
+    });
   });
 
   describe('a device edit of an object the server moved out of every synced collection', () => {

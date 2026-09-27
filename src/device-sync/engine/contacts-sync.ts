@@ -576,8 +576,14 @@ export class ContactsSync extends ItemSync {
     for (const held of items) if (held.kind === this.contactKind) rows.add(held.kind.meta(held.local).rowId);
   }
 
-  /** The device photo of every contact about to be planned that has a photo row (JPEG, ≤ 512 px). */
+  /**
+   * The group index `groupsOf` answers from (a run that downloaded no
+   * contact never read it: every removal from a group would look done), and
+   * the device photo of every contact about to be planned that has a photo
+   * row (JPEG, ≤ 512 px).
+   */
   protected async beforeUploadPlanning(items: Held[]): Promise<void> {
+    if (this.groupsStale && items.some((held) => held.kind === this.contactKind)) await this.refreshGroups();
     for (const held of items) {
       if (held.kind !== this.contactKind) continue;
       const contact = held.local as LocalContact;
