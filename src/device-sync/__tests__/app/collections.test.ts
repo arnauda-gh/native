@@ -3,6 +3,7 @@ import {
   CollectionsError,
   forgetSyncCollections,
   listSyncCollections,
+  onSyncCollectionsLoaded,
   otherAccountsSyncing,
   type CollectionsClient,
 } from '../../app/collections';
@@ -76,6 +77,19 @@ describe('listSyncCollections', () => {
     const [calls] = requests;
     expect(calls.map(([name, args]) => `${name} ${args.accountId}`)).toEqual(['AddressBook/get c', 'AddressBook/get team']);
     expect(calls[0][1].properties).toEqual(expect.arrayContaining(['id', 'name', 'myRights']));
+  });
+
+  it('tells every view of the account when a fresh list arrived', async () => {
+    const { client } = fakeClient({
+      'AddressBook/get c': () => ({ list: [{ id: 'b1', name: 'Personal' }] }),
+      'AddressBook/get team': () => ({ list: [] }),
+    });
+    const seen: string[][] = [];
+    const stop = onSyncCollectionsLoaded((id, authority, list) => seen.push([id, authority, ...list.map((c) => c.key)]));
+    await listSyncCollections('alice@x', CONTACTS_AUTHORITY, { client });
+    stop();
+    await listSyncCollections('alice@x', CONTACTS_AUTHORITY, { client, force: true });
+    expect(seen).toEqual([['alice@x', CONTACTS_AUTHORITY, 'c/b1']]);
   });
 
   it('remembers the personal JMAP account for the push routes', async () => {

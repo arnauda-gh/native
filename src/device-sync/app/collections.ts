@@ -92,7 +92,22 @@ const CALENDAR_PROPERTIES = ['id', 'name', 'color', 'isDefault', 'sortOrder', 'i
 const cache = new Map<string, { at: number; collections: SyncCollection[] }>();
 const inFlight = new Map<string, Promise<SyncCollection[]>>();
 
+type LoadedListener = (registryId: string, authority: Authority, collections: SyncCollection[]) => void;
+const loadedListeners = new Set<LoadedListener>();
+
 const cacheKey = (registryId: string, authority: Authority) => `${registryId}\n${authority}`;
+
+/**
+ * Calls `listener` with every list loaded from the server, so each view of an
+ * account's collections (the settings row's counts, the chooser) shows the
+ * freshest one. Returns the unsubscribe.
+ */
+export function onSyncCollectionsLoaded(listener: LoadedListener): () => void {
+  loadedListeners.add(listener);
+  return () => {
+    loadedListeners.delete(listener);
+  };
+}
 
 /** The last list loaded for an account, if it is still fresh. */
 export function cachedSyncCollections(registryId: string, authority: Authority): SyncCollection[] | null {
@@ -122,6 +137,7 @@ export function listSyncCollections(
   }
   const run = load(registryId, authority, options).then((collections) => {
     cache.set(key, { at: Date.now(), collections });
+    for (const listener of [...loadedListeners]) listener(registryId, authority, collections);
     return collections;
   });
   if (!options.client) {

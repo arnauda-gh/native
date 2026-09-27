@@ -7,6 +7,7 @@ import {
   cachedSyncCollections,
   CollectionsError,
   listSyncCollections,
+  onSyncCollectionsLoaded,
   type CollectionsErrorKind,
   type SyncCollection,
 } from '../../../device-sync/app/collections';
@@ -55,6 +56,14 @@ export function useSyncCollections(registryId: string, authority: Authority, act
       });
     return () => { cancelled = true; };
   }, [registryId, authority, active, attempt, feeds]);
+
+  // The chooser loads its own, fresher list: the row's counts follow it.
+  React.useEffect(
+    () => onSyncCollectionsLoaded((id, auth, collections) => {
+      if (id === registryId && auth === authority) setState({ kind: 'loaded', collections });
+    }),
+    [registryId, authority],
+  );
 
   const reload = React.useCallback(() => setAttempt((n) => n + 1), []);
   return { state, reload };
