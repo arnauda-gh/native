@@ -21,6 +21,7 @@ import { GroupBuilder, assertRow, deleteRow, updateRow } from './rows';
 import { rruleParts } from './rrule';
 import { sendsSchedulingMessages } from './scheduling';
 import { put } from './upload';
+import { isUnsetStatus } from './values';
 
 /** What must be equal for two rows to be one event (the calendar and the rule aside). */
 const PAIR_COLUMNS = [
@@ -58,6 +59,8 @@ export interface PairKind {
 /** How a deleted and a new row are one edit, or null. */
 export function pairKind(deleted: LocalEvent, fresh: LocalEvent): PairKind | null {
   for (const c of PAIR_COLUMNS) {
+    // A copy inserted without STATUS (Google Calendar) says nothing about it.
+    if (c === Events.STATUS && (isUnsetStatus(deleted.cells[c]) || isUnsetStatus(fresh.cells[c]))) continue;
     if (String(deleted.cells[c] ?? '') !== String(fresh.cells[c] ?? '')) return null;
   }
   const allDay = Number(fresh.cells[Events.ALL_DAY] ?? 0) === 1;

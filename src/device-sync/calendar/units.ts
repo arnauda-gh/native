@@ -12,6 +12,7 @@ import { MASTER_CELLS, EXCEPTION_CELLS, makeBaseline, sameCell } from './columns
 import { exdateSet } from './exdate';
 import { sameReminders } from './reminders';
 import type { RowImage } from './image';
+import { isUnsetStatus } from './values';
 
 export const COLUMN_UNITS: Record<string, readonly string[]> = {
   title: [Events.TITLE],
@@ -71,6 +72,16 @@ export function baselineOfImage(image: RowImage, isException: boolean): EventBas
 
 export function columnUnitDiffers(unit: string, a: Side, b: Side): boolean {
   return (COLUMN_UNITS[unit] ?? []).some((c) => !sameCell(c, a.cells[c], b.cells[c]));
+}
+
+/**
+ * Whether the device changed a column unit against what it is measured by
+ * (the baseline, or the plain instance of a new exception row). A STATUS an
+ * app left NULL is no change: it sets no status (`statusFromDevice`).
+ */
+export function deviceChangedUnit(unit: string, current: Side, reference: Side): boolean {
+  if (unit === 'status' && isUnsetStatus(current.cells[Events.STATUS])) return false;
+  return columnUnitDiffers(unit, current, reference);
 }
 
 /** Attendee rows by address key (the user's aliases are one key). */

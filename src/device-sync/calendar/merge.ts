@@ -42,6 +42,7 @@ import {
   attendeesByKey,
   baselineOfImage,
   columnUnitDiffers,
+  deviceChangedUnit,
   exdateEntries,
   isLossyEditor,
   remindersDiffer,
@@ -135,7 +136,7 @@ export function mergeRow(input: RowMergeInput): RowMerge {
   };
 
   for (const unit of input.isException ? EXCEPTION_COLUMN_UNITS : MASTER_COLUMN_UNITS) {
-    const local = (dirty || forced.has(unit)) && columnUnitDiffers(unit, cur, bl);
+    const local = (dirty || forced.has(unit)) && deviceChangedUnit(unit, cur, bl);
     const choice = decide(unit, local, columnUnitDiffers(unit, bs, rm), !columnUnitDiffers(unit, cur, rm));
     if (choice === 'local') {
       for (const c of COLUMN_UNITS[unit]) {

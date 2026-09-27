@@ -27,11 +27,22 @@ export function statusToDevice(status: unknown): number {
   }
 }
 
-export function statusFromDevice(value: unknown): 'confirmed' | 'tentative' | 'cancelled' {
+/**
+ * STATUS → `status`; null when the row has none. CalendarProvider has no
+ * default for STATUS, and apps that do not model it (Google Calendar) leave
+ * it NULL on the events and exceptions they insert: that sets no status.
+ */
+export function statusFromDevice(value: unknown): 'confirmed' | 'tentative' | 'cancelled' | null {
+  if (isUnsetStatus(value)) return null;
   const n = Number(value);
   if (n === EventStatus.TENTATIVE) return 'tentative';
   if (n === EventStatus.CANCELED) return 'cancelled';
   return 'confirmed';
+}
+
+/** A STATUS cell an app left NULL (see `statusFromDevice`). */
+export function isUnsetStatus(value: unknown): boolean {
+  return value === null || value === undefined || value === '';
 }
 
 /** `freeBusyStatus` → AVAILABILITY; JSCalendar's default is busy. */

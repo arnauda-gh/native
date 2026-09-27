@@ -17,6 +17,47 @@ function real(options: Parameters<typeof createHarness>[0] = {}): Harness {
 type Overrides = Record<string, Record<string, unknown>>;
 
 describe('calendar device edits through the engine', () => {
+  it('creates an event and an occurrence edit an app left without a status as confirmed ones', async () => {
+    const h = real();
+    const series = h.server.addEvent('a', {
+      uid: 'weekly-uid',
+      title: 'Weekly',
+      start: '2026-10-05T08:00:00',
+      duration: 'PT1H',
+      timeZone: 'Europe/Berlin',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', count: 8 },
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const master = h.events().find((e) => e[Events._SYNC_ID] === `a/${series}`)!;
+    const rowId = Number(master[Events.CALENDAR_ID]);
+
+    // Google Calendar leaves STATUS NULL on the events and exceptions it inserts.
+    const created = h.device.user.insertEvent(rowId, {
+      [Events.TITLE]: 'New from Google Calendar',
+      [Events.DTSTART]: Date.UTC(2026, 9, 14, 13),
+      [Events.DTEND]: Date.UTC(2026, 9, 14, 14),
+      [Events.EVENT_TIMEZONE]: 'Europe/Berlin',
+      [Events.STATUS]: null,
+    });
+    h.device.user.insertException(Number(master._id), Date.UTC(2026, 10, 9, 7), {
+      [Events.TITLE]: 'Only Nov 9',
+      [Events.DTSTART]: Date.UTC(2026, 10, 9, 7),
+      [Events.DTEND]: Date.UTC(2026, 10, 9, 8),
+      [Events.STATUS]: null,
+    });
+    expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 1, updated: 1 } } });
+
+    const event = h.server.all('CalendarEvent', 'a').find((e) => e.title === 'New from Google Calendar')!;
+    expect(event.status).toBeUndefined();
+    const overrides = h.server.get('CalendarEvent', 'a', series)!.recurrenceOverrides as Overrides;
+    expect(overrides['2026-11-09T08:00:00']).toMatchObject({ title: 'Only Nov 9' });
+    expect(overrides['2026-11-09T08:00:00'].status).toBeUndefined();
+    // The rows hold the default, confirmed, and are clean.
+    expect(h.events().find((e) => Number(e._id) === created)).toMatchObject({ [Events.STATUS]: 1, [Events.DIRTY]: 0 });
+    expect(h.events().filter((e) => e[Events.ORIGINAL_SYNC_ID] === `a/${series}`).map((e) => [e[Events.STATUS], e[Events.DIRTY]])).toEqual([[1, 0]]);
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {

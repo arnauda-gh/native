@@ -103,6 +103,21 @@ describe('calendar planner: recurrence edits made on the device', () => {
     expect(h.row(x.eventId)).toBeUndefined();
   });
 
+  it('does not make an occurrence an app left without a status (Google Calendar\'s "this event") tentative', async () => {
+    const event = single({ recurrenceRule: { frequency: 'weekly', count: 5 } });
+    const { h, id } = await synced(event);
+    h.fake.user.insertException(id, utc('2026-10-13T10:00:00Z'), {
+      [Events.TITLE]: 'Only this Tuesday', [Events.DTSTART]: utc('2026-10-13T10:00:00Z'), [Events.DTEND]: utc('2026-10-13T11:00:00Z'), [Events.STATUS]: null,
+    });
+    const local = (await h.local('e1'))!;
+    const plan = calendarPlanner.planUpload(local, h.ctx);
+    const overrides = patchOf(plan).patch.recurrenceOverrides as Record<string, Record<string, unknown>>;
+    expect(overrides['2026-10-13T12:00:00']).toEqual({ title: 'Only this Tuesday', start: '2026-10-13T12:00:00', duration: 'PT1H' });
+    await accept(h, event, local, plan);
+    const [x] = (await h.local('e1'))!.exceptions;
+    expect(x.cells).toMatchObject({ [Events.STATUS]: 1, [Events.DIRTY]: 0 });
+  });
+
   it('clears an occurrence\'s own description and location instead of letting the series\' come back', async () => {
     const event = weekly();
     event.description = 'Daily agenda';

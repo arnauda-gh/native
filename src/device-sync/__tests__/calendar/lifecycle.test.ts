@@ -100,6 +100,37 @@ describe('calendar planner: new events', () => {
     expect(calendarPlanner.planDownload(server, after, h.ctx).effect).toBe('none');
   });
 
+  it('creates an event an app left without a status (Google Calendar) without making it tentative', async () => {
+    const h = await new Harness().setup();
+    // CalendarProvider has no default for STATUS: an app that does not write it leaves it NULL.
+    const id = h.fake.user.insertEvent(h.rowIds.get('b')!, {
+      [Events.TITLE]: 'From Google Calendar', [Events.DTSTART]: utc('2026-10-14T15:00:00Z'), [Events.DTEND]: utc('2026-10-14T16:00:00Z'), [Events.EVENT_TIMEZONE]: 'Europe/Berlin', [Events.STATUS]: null,
+    });
+    const { local, create } = await claimAndCreate(h, id);
+    expect(create.object).not.toHaveProperty('status');
+    const server = { ...(create.object as CalendarEventWire), id: 'g1' } as CalendarEventWire;
+    await h.apply(calendarPlanner.planAccepted(local, server, h.ctx).ops);
+    // Written as JSCalendar's default, confirmed.
+    expect(h.row(id)).toMatchObject({ [Events.STATUS]: 1, [Events.DIRTY]: 0 });
+    expect(calendarPlanner.planDownload(server, (await h.local('g1'))!, h.ctx).effect).toBe('none');
+  });
+
+  it('leaves out exclusions a new series inherited from before its start (Etar\'s split copies the EXDATE)', async () => {
+    const h = await new Harness().setup();
+    const id = h.fake.user.insertEvent(h.rowIds.get('b')!, {
+      [Events.TITLE]: 'Weekly (new time)',
+      [Events.DTSTART]: utc('2026-11-16T09:00:00Z'),
+      [Events.DURATION]: 'P3600S',
+      [Events.RRULE]: 'FREQ=WEEKLY;COUNT=3;BYDAY=MO',
+      [Events.EVENT_TIMEZONE]: 'Europe/Berlin',
+      // The old series' exclusions (Oct 12, Nov 2) and one of this series (Nov 23).
+      [Events.EXDATE]: '20261012T060000Z,20261102T070000Z,20261123T090000Z',
+      [Events.STATUS]: 1,
+    });
+    const { create } = await claimAndCreate(h, id);
+    expect(create.object.recurrenceOverrides).toEqual({ '2026-11-23T10:00:00': { excluded: true } });
+  });
+
   it('invites the attendees of a new event as its organizer', async () => {
     const h = await new Harness().setup();
     const id = h.fake.user.insertEvent(
@@ -232,6 +263,20 @@ describe('calendar planner: accepted uploads, merges and deletions', () => {
     expect(h.row(id)).toMatchObject({ [Events.TITLE]: 'Server title', [Events.DIRTY]: 0 });
   });
 
+  it('never reads a status an app left NULL as an edit, in uploads or merges', async () => {
+    const { h, id } = await synced(weekly());
+    expect(h.row(id)[Events.STATUS]).toBe(0);
+    // A row an app wrote without STATUS (only an insert can leave it NULL), then edited.
+    h.fake.table('events').get(id)![Events.STATUS] = null;
+    h.fake.user.updateEvent(id, { [Events.TITLE]: 'Renamed' });
+    expect(actionsOf(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx))[0]).toMatchObject({ kind: 'update', patch: { title: 'Renamed' } });
+    expect(Object.keys((actionsOf(calendarPlanner.planUpload((await h.local('bl'))!, h.ctx))[0] as { patch: object }).patch)).toEqual(['title']);
+    // The server's status change meanwhile is no conflict: the row takes it, the title stays for the upload.
+    const plan = await h.download({ ...weekly(), status: 'cancelled' });
+    expect(plan).toMatchObject({ conflicts: 0, stillDirty: true });
+    expect(h.row(id)).toMatchObject({ [Events.STATUS]: 2, [Events.TITLE]: 'Renamed', [Events.DIRTY]: 1 });
+  });
+
   it('treats the same change on both sides as converged', async () => {
     const { h, id } = await synced(weekly());
     h.fake.user.updateEvent(id, { [Events.TITLE]: 'Same' });
@@ -360,6 +405,17 @@ describe('calendar planner: pairs', () => {
     const events = await h.events();
     const pairs = calendarPlanner.planPairs(events.filter((e) => e.deleted), events.filter((e) => !e.syncId), h.ctx);
     expect(pairs.map((p) => p.actions)).toEqual([[{ kind: 'update', id: 'e1', patch: { recurrenceRule: null } }]]);
+  });
+
+  it('pairs a copy an app inserted without a status (Google Calendar\'s "Copy to" + delete) with the original', async () => {
+    const { h, id } = await synced(single());
+    h.fake.user.deleteEvent(id);
+    h.fake.user.insertEvent(h.rowIds.get('w')!, {
+      [Events.TITLE]: 'Lunch', [Events.DTSTART]: utc('2026-10-06T10:00:00Z'), [Events.DTEND]: utc('2026-10-06T11:00:00Z'), [Events.EVENT_TIMEZONE]: 'Europe/Berlin', [Events.STATUS]: null, [Events.AVAILABILITY]: 0, [Events.ACCESS_LEVEL]: 0,
+    });
+    const events = await h.events();
+    const pairs = calendarPlanner.planPairs(events.filter((e) => e.deleted), events.filter((e) => !e.syncId), h.ctx);
+    expect(pairs.map((p) => p.actions)).toEqual([[{ kind: 'update', id: 'e1', patch: { 'calendarIds/b': null, 'calendarIds/w': true } }]]);
   });
 
   it('does not pair unrelated rows', async () => {

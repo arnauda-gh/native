@@ -54,9 +54,11 @@ export function computeCreate(local: LocalEvent, uid: string, calendarId: string
     title: titleValue(cells),
     start: t.start,
     duration: t.duration,
-    status: statusFromDevice(cells[Events.STATUS]),
     freeBusyStatus: availabilityFromDevice(cells[Events.AVAILABILITY]),
   };
+  // A row without STATUS gets JSCalendar's default, confirmed.
+  const status = statusFromDevice(cells[Events.STATUS]);
+  if (status) object.status = status;
   if (t.showWithoutTime) object.showWithoutTime = true;
   else object.timeZone = t.timeZone;
   const description = descriptionValue(cells);
@@ -88,8 +90,10 @@ export function computeCreate(local: LocalEvent, uid: string, calendarId: string
       return key;
     };
     for (const entry of exdateEntries(sideOfRow(local))) {
-      const key = checked(exdateEntryKey(entry, zone));
-      if (key) overrides[key] = { excluded: true };
+      const key = exdateEntryKey(entry, zone);
+      // Etar's "this and following" copies the old series' EXDATE: dates before the start are none of this series.
+      if (!key || key < t.start) continue;
+      overrides[checked(key)!] = { excluded: true };
     }
     for (const x of local.exceptions) {
       const key = checked(x.recurrenceId);

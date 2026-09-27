@@ -58,6 +58,7 @@ import {
   MASTER_COLUMN_UNITS,
   baselineOfImage,
   columnUnitDiffers,
+  deviceChangedUnit,
   exdateEntries,
   isLossyEditor,
   remindersDiffer,
@@ -219,7 +220,7 @@ export function computeUpdate(local: LocalEvent, ctx: CalendarContext): UploadCo
   const changed = (unit: string) => {
     if (!bl) return false;
     const forced = local.split === 'source' && unit === 'rule';
-    return (local.dirty || forced) && columnUnitDiffers(unit, cur, bl);
+    return (local.dirty || forced) && deviceChangedUnit(unit, cur, bl);
   };
 
   for (const unit of MASTER_COLUMN_UNITS) {
@@ -444,7 +445,7 @@ function exceptionChanges(
     if (unit === 'privacy') continue; // Stalwart drops privacy from overrides.
     // Etar answers one instance with STATUS_CONFIRMED on it; an attendee may not change an event's status.
     if (unit === 'status' && !organizer) continue;
-    if (unit !== 'timing' && !columnUnitDiffers(unit, cur, reference)) continue;
+    if (unit !== 'timing' && !deviceChangedUnit(unit, cur, reference)) continue;
     // A new exception row holds what its app copied: an empty value there is one it did not model, not a deletion.
     if (!existing && INHERITED_WHEN_EMPTY.has(unit) && isEmptyUnit(unit, x.cells)) continue;
     const cells = x.cells;
