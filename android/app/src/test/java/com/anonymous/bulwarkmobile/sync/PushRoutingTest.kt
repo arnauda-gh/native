@@ -65,6 +65,26 @@ class PushRoutingTest {
     }
 
     @Test
+    fun `an Email or Mailbox change is possible mail, as a subscription from an older build sends it`() {
+        for (changed in listOf(
+            """{"c":{"Email":"s1","Mailbox":"s2"}}""",
+            """{"c":{"Email":"s1"}}""",
+            """{"c":{"Mailbox":"s1"}}""",
+        )) {
+            val decision = PushRouting.decide(stateChange(changed), routes)
+            assertTrue("changed=$changed", decision.startMailTask)
+            assertTrue("changed=$changed", decision.syncs.isEmpty())
+        }
+        val mixed = PushRouting.decide(stateChange("""{"team":{"CalendarEvent":"e1"},"c":{"Email":"s1"}}"""), routes)
+        assertTrue(mixed.startMailTask)
+        assertEquals(setOf("alice-work" to calendar), mixed.syncs)
+        // Types that are neither mail nor device sync say nothing about mail.
+        val other = PushRouting.decide(stateChange("""{"c":{"Thread":"t1","ContactCard":"s1"}}"""), routes)
+        assertFalse(other.startMailTask)
+        assertEquals(setOf("alice@example.org" to contacts), other.syncs)
+    }
+
+    @Test
     fun `an email push always starts the mail task`() {
         val data = mapOf("kind" to "jmap-email-push", "accountId" to "c", "changed" to """{"c":{"EmailDelivery":"s"}}""")
         assertTrue(PushRouting.decide(data, routes).startMailTask)

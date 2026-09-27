@@ -237,6 +237,42 @@ describe('pushes for device sync (#34)', () => {
     await pushBackgroundTask(stateChange({ 'jmap-primary': { EmailDelivery: 'm1', ContactCard: 's1' } }));
     expect(jmapClient.getStoredCredentials).toHaveBeenCalledWith(LOCAL);
   });
+
+  it('takes an Email or Mailbox change for possible mail, as a subscription from an older build sends it', () => {
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Email: 's1', Mailbox: 's2' } })))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Email: 's1' } })))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Mailbox: 's1' } })))).toBe(false);
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { CalendarEvent: 'e1' }, b: { Email: 's1' } })))).toBe(false);
+    // Types that are neither mail nor device sync say nothing about mail.
+    expect(carriesNoMail(parseRelayPushData(stateChange({ a: { Thread: 't1', ContactCard: 's1' } })))).toBe(true);
+  });
+
+  it('notifies new mail from a subscription that listens to Email and Mailbox', async () => {
+    (secureFetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, init?: { body?: string }) => {
+      if (url.endsWith('/.well-known/jmap')) {
+        return {
+          ok: true,
+          json: async () => ({
+            apiUrl: 'https://mail.example.com/jmap/',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'jmap-primary' },
+            accounts: { 'jmap-primary': {} },
+          }),
+        };
+      }
+      // The legacy path: the inbox, its newest unread ids, then the messages.
+      const [[name]] = JSON.parse(init?.body ?? '{}').methodCalls;
+      const body = name === 'Mailbox/get'
+        ? { list: [{ id: 'inbox', role: 'inbox' }] }
+        : name === 'Email/query'
+          ? { ids: ['m1'] }
+          : { list: [{ id: 'm1', threadId: 't1', keywords: {}, subject: 'Hi', from: [{ email: 'bob@example.com' }] }] };
+      return { ok: true, json: async () => ({ methodResponses: [[name, body, '0']] }) };
+    });
+
+    await pushBackgroundTask(stateChange({ 'jmap-primary': { Email: 's1', Mailbox: 's2' } }));
+
+    expect(showNotification).toHaveBeenCalledWith(expect.objectContaining({ emailId: 'm1', accountId: LOCAL }));
+  });
 });
 
 describe('selectNotifiableEmails', () => {

@@ -13,7 +13,7 @@ import org.json.JSONObject
  * The relay forwards the JMAP StateChange's `changed` map verbatim (FCM data
  * key `changed`: JMAP account id → type → state; only its first account is
  * repeated as `accountId`), so every account key is looked at. The mail task
- * runs only for mail: when some account's map has `EmailDelivery`, for an
+ * runs only for mail: when some account's map has a mail type, for an
  * EmailPush, or when `changed` is missing or unreadable (older relays), so a
  * contact change never ends in a mail notification.
  */
@@ -28,7 +28,15 @@ object PushRouting {
     )
 
     private const val EMAIL_PUSH_KIND = "jmap-email-push"
-    private const val EMAIL_DELIVERY = "EmailDelivery"
+
+    /**
+     * Types that may mean new mail: `EmailDelivery`, and `Email`/`Mailbox`,
+     * which new mail changes too. A subscription made by an older build
+     * listens to them until the launch-time resync replaces its types, and a
+     * server without `EmailDelivery` has only them. Keep in sync with
+     * MAIL_TYPES in src/lib/push-background-task.ts.
+     */
+    private val MAIL_TYPES = setOf("EmailDelivery", "Email", "Mailbox")
     private val CONTACT_TYPES = setOf("ContactCard", "AddressBook")
     private val CALENDAR_TYPES = setOf("CalendarEvent", "Calendar")
 
@@ -42,7 +50,7 @@ object PushRouting {
                 mail = true
                 continue
             }
-            if (EMAIL_DELIVERY in types) mail = true
+            if (types.any { it in MAIL_TYPES }) mail = true
             val contacts = types.any { it in CONTACT_TYPES }
             val calendar = types.any { it in CALENDAR_TYPES }
             for (route in routes[jmapAccountId].orEmpty()) {

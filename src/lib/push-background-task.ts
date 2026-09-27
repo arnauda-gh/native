@@ -378,18 +378,25 @@ async function detachedNewestUnreadInboxIds(
   return (qBody.ids as string[]) ?? [];
 }
 
+// Types that may mean new mail: `EmailDelivery`, and `Email`/`Mailbox`, which
+// new mail changes too. A subscription made by an older build listens to them
+// until the launch-time resync replaces its types, and a server without
+// `EmailDelivery` has only them. Keep in sync with MAIL_TYPES in PushRouting.kt.
+const MAIL_TYPES = ['EmailDelivery', 'Email', 'Mailbox'];
+
 /**
  * A StateChange push in which no account got new mail: only contact or
  * calendar changes, which the native push router already turned into device
- * syncs (#34, docs/device-sync.md "Triggers"). Without `EmailDelivery` there
- * is nothing to notify, and the legacy path (the newest unread mail) must
- * not run for it. An empty or missing `changed` map keeps the old behaviour.
+ * syncs (#34, docs/device-sync.md "Triggers"). Without a mail type there is
+ * nothing to notify, and the legacy path (the newest unread mail) must not
+ * run for it. An empty or missing `changed` map keeps the old behaviour.
  */
 export function carriesNoMail(payload: RelayPushData): boolean {
   if (payload.kind !== 'jmap-state-change' || !payload.changed) return false;
   const accounts = Object.values(payload.changed);
   if (accounts.length === 0) return false;
-  return !accounts.some((types) => !!types && typeof types === 'object' && 'EmailDelivery' in types);
+  return !accounts.some((types) => !!types && typeof types === 'object'
+    && MAIL_TYPES.some((type) => type in types));
 }
 
 // Fired by BulwarkPushTaskService when a data FCM message arrives. Runs in a
