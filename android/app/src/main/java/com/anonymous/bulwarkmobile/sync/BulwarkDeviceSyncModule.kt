@@ -7,6 +7,7 @@ import android.content.ActivityNotFoundException
 import android.content.ContentResolver
 import android.content.Intent
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
@@ -162,7 +163,12 @@ class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openAccountSettings(name: String, promise: Promise) = settle(promise) {
         val account = DeviceSyncAccounts.account(reactApplicationContext, name)
-        val perAccount = Intent(ACTION_ACCOUNT_SYNC_SETTINGS).putExtra(EXTRA_ACCOUNT, account)
+        val perAccount = Intent(ACTION_ACCOUNT_SYNC_SETTINGS)
+            .putExtra(EXTRA_ACCOUNT, account)
+            // Newer Settings apps pass only these arguments on to the account's
+            // screen; without them it closes at once ("Account provided does
+            // not exist: null", Android 12L), and no exception tells us so.
+            .putExtra(EXTRA_SHOW_FRAGMENT_ARGUMENTS, Bundle().apply { putParcelable(EXTRA_ACCOUNT, account) })
         val overview = Intent(Settings.ACTION_SYNC_SETTINGS)
             .putExtra(Settings.EXTRA_ACCOUNT_TYPES, arrayOf(account.type))
         val activity = reactApplicationContext.currentActivity
@@ -309,6 +315,8 @@ class BulwarkDeviceSyncModule(reactContext: ReactApplicationContext) :
         /** Settings' per-account sync screen; public on AOSP-based settings apps, but not in the SDK. */
         private const val ACTION_ACCOUNT_SYNC_SETTINGS = "android.settings.ACCOUNT_SYNC_SETTINGS"
         private const val EXTRA_ACCOUNT = "account"
+        /** SettingsActivity.EXTRA_SHOW_FRAGMENT_ARGUMENTS: the arguments of the screen it shows. */
+        private const val EXTRA_SHOW_FRAGMENT_ARGUMENTS = ":settings:show_fragment_args"
 
         @Volatile private var currentInstance: BulwarkDeviceSyncModule? = null
 
