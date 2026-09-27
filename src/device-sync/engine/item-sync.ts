@@ -66,6 +66,9 @@ type Removal = 'destroyed' | 'outside';
 /** Method-level refusals of a whole `/set` that concern the account, not the objects. */
 const ACCOUNT_REFUSALS = new Set(['accountReadOnly', 'forbidden', 'accountNotFound', 'accountNotSupportedByMethod']);
 
+/** Refusals to list an account's collections: the account is not readable for this user. */
+const ACCOUNT_UNREADABLE = new Set(['forbidden', 'accountNotFound', 'accountNotSupportedByMethod']);
+
 export abstract class ItemSync {
   /** Per account: object ids put on `stale` (true) or fetched fine again (false), for the next state op. */
   private readonly staleMarks = new Map<string, Map<string, boolean>>();
@@ -75,6 +78,8 @@ export abstract class ItemSync {
   private readonly extraCreated = new Map<string, Set<string>>();
   /** Per account: `ifInState` of the next `/set` (the download's state, then our last `newState`). */
   private readonly setStates = new Map<string, string | null>();
+  /** Accounts that refused to list their collections this run: left out of it (see `containersOf`). */
+  private readonly unreadable = new Set<string>();
 
   constructor(protected readonly env: RunEnv) {}
 
@@ -171,12 +176,37 @@ export abstract class ItemSync {
   }
 
   protected accountIds(): string[] {
-    return this.env.accounts.map((a) => a.id);
+    return this.env.accounts.map((a) => a.id).filter((id) => !this.unreadable.has(id));
   }
 
   /** The session's accounts plus accounts the rows were written for that are gone from it. */
   protected knownAccountIds(): string[] {
-    return [...new Set([...this.accountIds(), ...Object.keys(this.env.store.committed.accounts)])];
+    return [...new Set([...this.accountIds(), ...Object.keys(this.env.store.committed.accounts)])]
+      .filter((id) => !this.unreadable.has(id));
+  }
+
+  /**
+   * One account's collections, or null when the account refuses to list them
+   * (`forbidden`, `accountNotFound`, `accountNotSupportedByMethod`): Stalwart
+   * lists an account shared for mail only with every capability, and access
+   * can go away. Such an account is left out of the run and reported; the
+   * rows written for it stay as they are, since a refusal can pass and must
+   * not drop anything from the device.
+   */
+  protected async containersOf<T>(
+    type: 'AddressBook' | 'Calendar',
+    accountId: string,
+    properties: readonly string[],
+  ): Promise<{ list: T[]; state: string | null } | null> {
+    try {
+      return await this.env.jmap.getContainers<T>(type, accountId, properties);
+    } catch (error) {
+      if (!isMethodError(error) || !ACCOUNT_UNREADABLE.has(error.type)) throw error;
+      this.unreadable.add(accountId);
+      this.env.report.itemError({ ref: accountId, side: 'download', type: error.type, description: error.message });
+      this.env.log(`account ${accountId} left out: ${error.type}`);
+      return null;
+    }
   }
 
   // ── State ──

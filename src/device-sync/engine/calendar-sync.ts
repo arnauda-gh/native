@@ -219,7 +219,9 @@ export class CalendarSync extends ItemSync {
     this.readOnlyKeys.clear();
     const selected: Array<{ jmapAccountId: string; calendar: CalendarLike; readOnly: boolean; accountName: string }> = [];
     for (const account of this.env.accounts) {
-      const { list, state } = await this.env.jmap.getContainers<CalendarLike>('Calendar', account.id, CALENDAR_PROPERTIES);
+      const containers = await this.containersOf<CalendarLike>('Calendar', account.id, CALENDAR_PROPERTIES);
+      if (!containers) continue;
+      const { list, state } = containers;
       this.calendars.set(account.id, list);
       if (state) {
         this.collectionStates.set(account.id, state);

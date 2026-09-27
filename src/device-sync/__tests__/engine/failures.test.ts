@@ -9,6 +9,7 @@ import type { JmapInvocation, JmapResponse } from '../../types';
 import {
   addDeviceContact,
   addServerCards,
+  CALENDAR_AUTHORITY,
   CONTACTS_AUTHORITY,
   createHarness,
   CrashError,
@@ -606,5 +607,66 @@ describe('device sync engine: deletion guards', () => {
 
   it('fails a crash-free run with CrashError only when injected', () => {
     expect(new CrashError('x').name).toBe('CrashError');
+  });
+});
+
+describe('device sync engine: accounts that refuse access', () => {
+  // Stalwart lists an account shared for mail only with every capability,
+  // and its /get calls answer `forbidden`.
+  it('syncs the personal account when a shared one refuses to list its address books', async () => {
+    const h = createHarness({ accounts: 'withShared' });
+    addServerCards(h, ['Ada']);
+    h.server.failNextMethod('AddressBook/get', { type: 'forbidden', description: 'You do not have access to account team' }, { accountId: 'team' });
+
+    const report = await h.run();
+
+    expect(report.outcome).toBe('ok');
+    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: 'team', side: 'download', type: 'forbidden' })]);
+    expect(h.contactNamed('Ada')).toBeDefined();
+  });
+
+  it('keeps the contacts of an account that stops listing its address books, and syncs it again once it does', async () => {
+    const h = createHarness({ accounts: 'withShared' });
+    const teamBook = h.server.all('AddressBook', 'team')[0].id as string;
+    h.prefs.contactsSelection[`team/${teamBook}`] = true;
+    const [mate] = addServerCards(h, ['Teammate'], 'team', teamBook);
+    await h.run();
+    expect(h.contactNamed('Teammate')).toBeDefined();
+
+    addServerCards(h, ['Ada']);
+    h.server.serverUpdate('ContactCard', 'team', mate, { 'name/full': 'Team mate' });
+    h.server.failNextMethod('AddressBook/get', { type: 'forbidden' }, { accountId: 'team' });
+    const report = await h.run();
+
+    expect(report.outcome).toBe('ok');
+    expect(h.contactNamed('Ada')).toBeDefined();
+    expect(h.contactNamed('Teammate')).toBeDefined();
+
+    expect((await h.run()).itemErrors).toEqual([]);
+    expect(h.contactNamed('Team mate')).toBeDefined();
+  });
+
+  it('keeps the calendar and events of an account that refuses to list its calendars', async () => {
+    const h = createHarness({ accounts: 'withShared' });
+    const teamCalendar = h.server.all('Calendar', 'team')[0].id as string;
+    h.prefs.calendarSelection[`team/${teamCalendar}`] = true;
+    h.server.addEvent('team', {
+      uid: 'uid-team',
+      title: 'Team meeting',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT1H',
+      timeZone: 'Etc/UTC',
+      calendarIds: { [teamCalendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    expect(h.events()).toHaveLength(1);
+
+    h.server.failNextMethod('Calendar/get', { type: 'forbidden' }, { accountId: 'team' });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report.outcome).toBe('ok');
+    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: 'team', type: 'forbidden' })]);
+    expect(h.events()).toHaveLength(1);
+    expect(h.device.rows('calendars').some((c) => c._sync_id === `team/${teamCalendar}`)).toBe(true);
   });
 });

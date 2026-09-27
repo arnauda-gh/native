@@ -286,7 +286,9 @@ export class ContactsSync extends ItemSync {
   protected async collections(write: boolean): Promise<void> {
     this.syncedKeys.clear();
     for (const account of this.env.accounts) {
-      const { list, state } = await this.env.jmap.getContainers<AddressBookLike>('AddressBook', account.id, ADDRESS_BOOK_PROPERTIES);
+      const containers = await this.containersOf<AddressBookLike>('AddressBook', account.id, ADDRESS_BOOK_PROPERTIES);
+      if (!containers) continue;
+      const { list, state } = containers;
       this.books.set(account.id, list);
       for (const book of list) {
         if (isCollectionSelected(this.env.prefs.contactsSelection, account, CONTACTS_AUTHORITY, book)) {
