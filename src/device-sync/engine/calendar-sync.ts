@@ -516,6 +516,40 @@ export class CalendarSync extends ItemSync {
   }
 
   /**
+   * A deleted row whose event the server destroyed may be half of a move the
+   * device made (a pair not uploaded yet): the server's deletion wins over the
+   * move, an edit, so the new row goes too instead of being created (a conflict).
+   */
+  protected async alongDestroyed(acct: string, removed: Held[]): Promise<Work[]> {
+    const deleted = removed.map((h) => h.local as LocalEvent).filter((e) => e.deleted);
+    if (!deleted.length) return [];
+    const fresh = (await this.eventKind.loadNew()).filter((e) => {
+      const m = this.eventKind.meta(e);
+      return !m.deleted && !m.pending && this.accountOfItem({ kind: this.eventKind, local: e }) === acct;
+    });
+    if (!fresh.length) return [];
+    let pairs: PairPlan[];
+    try {
+      pairs = this.planner.planPairs(deleted, fresh, this.ctx(acct));
+    } catch (error) {
+      this.plannerFailed(acct, `pairs:${acct}`, 'download', error);
+      return [];
+    }
+    const conflict = (work: Work): Work => ({
+      ...work,
+      applied: async (results) => {
+        await work.applied?.(results);
+        this.env.report.conflicts++;
+      },
+      replan: work.replan && (async () => {
+        const next = await work.replan!();
+        return next && conflict(next);
+      }),
+    });
+    return pairs.map((pair) => conflict(this.purgeWork(acct, { kind: this.eventKind, local: pair.fresh }, false)));
+  }
+
+  /**
    * A pair's rows after the server took its patch. When their assert fails
    * (an app changed them during the upload), both rows are read and paired
    * again; only a pair that uploads the same patch is written.

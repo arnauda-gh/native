@@ -165,6 +165,14 @@ export abstract class ItemSync {
     return [];
   }
   protected onDiscard(_next: SyncState, _accounts: Set<string>): void {}
+  /**
+   * Local items that go with the rows of objects the server destroyed
+   * (calendar: the new row of a move the device made of a deleted event; the
+   * server's deletion wins over the move). Written with those rows.
+   */
+  protected async alongDestroyed(_acct: string, _removed: Held[]): Promise<Work[]> {
+    return [];
+  }
   /** Whether a pending create of `target` may adopt this object (contacts: the target book holds it). */
   protected adoptionTargetMatches(acct: string, _object: ServerObject, target: string): boolean {
     return accountOfRef(target) === acct;
@@ -582,6 +590,7 @@ export abstract class ItemSync {
       if (work) works.push(work);
       else this.markResolved(acct, object.id);
     }
+    const removed: Held[] = [];
     for (const id of allGone) {
       const found = held.get(refOf(acct, id));
       let work: Work | null;
@@ -591,9 +600,12 @@ export abstract class ItemSync {
         this.plannerFailed(acct, refOf(acct, id), 'download', error, id);
         continue;
       }
-      if (work) works.push(work);
-      else this.markResolved(acct, id);
+      if (work && found) {
+        works.push(work);
+        removed.push(found);
+      } else this.markResolved(acct, id);
     }
+    if (removed.length) works.push(...(await this.alongDestroyed(acct, removed)));
     await this.env.writer.write(works, mutate ? this.tail([acct], mutate) : undefined);
     await this.readBack(written);
   }
@@ -1320,10 +1332,10 @@ export abstract class ItemSync {
           return this.succeeded(acct, p, done, objects);
         }
         if (failure.action.kind === 'update') {
-          // Deleted on the server meanwhile: the server delete wins, the rows go.
+          // Deleted on the server meanwhile: the server delete wins, the rows go (a pair's new row too).
           const id = idInAccount(p.meta.sourceId, acct);
           const work = id ? this.removeWork(acct, id, p.held, 'destroyed') : null;
-          return work ? [work] : [];
+          return work ? [work, ...(await this.alongDestroyed(acct, [p.held]))] : [];
         }
         return [this.poisonWork(p, failure.error)];
       case 'forbidden':

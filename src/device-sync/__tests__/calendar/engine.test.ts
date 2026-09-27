@@ -216,6 +216,65 @@ describe('calendar device edits through the engine', () => {
       expect(h.batches.log.slice(before).filter((ops) => ops.some((op) => op.op !== 'syncState' && op.op !== 'assert'))).toEqual([]);
     });
 
+    describe('when the server deleted the event meanwhile', () => {
+      async function movedLunch() {
+        const h = real();
+        const work = h.server.addCalendar('a', { name: 'Work' });
+        const id = h.server.addEvent('a', {
+          uid: 'lunch-uid',
+          title: 'Lunch',
+          start: '2026-10-06T12:00:00',
+          duration: 'PT1H',
+          timeZone: 'Europe/Berlin',
+          calendarIds: { [h.calendar]: true },
+        });
+        await h.run(CALENDAR_AUTHORITY);
+        const master = Number(h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!._id);
+        const workRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `a/${work}`)!._id);
+        etarMove(h, master, workRow, [{ minutes: 30 }]);
+        return { h, id };
+      }
+      const creates = (h: Harness) =>
+        h.server.calls('CalendarEvent/set').filter(([, args]) => Object.keys((args as { create?: object }).create ?? {}).length);
+
+      it('removes the moved event when the patch of the move finds it gone', async () => {
+        const { h, id } = await movedLunch();
+        h.server.setErrorFor('CalendarEvent', 'a', id, { type: 'notFound' });
+
+        const report = await h.run(CALENDAR_AUTHORITY);
+
+        expect(report).toMatchObject({ outcome: 'ok', conflicts: 1, stats: { uploaded: { created: 0 } } });
+        expect(creates(h)).toEqual([]);
+        expect(h.events()).toEqual([]);
+      });
+
+      it('removes the moved event when the download finds it destroyed', async () => {
+        const { h, id } = await movedLunch();
+        h.server.serverDestroy('CalendarEvent', 'a', id);
+
+        const report = await h.run(CALENDAR_AUTHORITY);
+
+        expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], conflicts: 1, stats: { uploaded: { created: 0 } } });
+        expect(h.server.all('CalendarEvent', 'a')).toEqual([]);
+        expect(h.events()).toEqual([]);
+      });
+
+      it('removes the moved event when it is destroyed while the move is on its way', async () => {
+        const { h, id } = await movedLunch();
+        const stop = h.server.onBeforeRequest((request) => {
+          if (!request.methods.includes('CalendarEvent/set')) return;
+          stop();
+          h.server.serverDestroy('CalendarEvent', 'a', id);
+        });
+
+        const report = await h.run(CALENDAR_AUTHORITY);
+
+        expect(report).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { created: 0 } } });
+        expect(h.server.all('CalendarEvent', 'a')).toEqual([]);
+        expect(h.events()).toEqual([]);
+      });
+    });
+
     it('keeps an occurrence edit that had not reached the server when the series moves', async () => {
       const h = real();
       const work = h.server.addCalendar('a', { name: 'Work' });
