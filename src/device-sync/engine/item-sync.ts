@@ -467,10 +467,16 @@ export abstract class ItemSync {
       account.itemsState = from;
       account.reconcile = null;
       account.selected = selected;
+      if (account.partial) account.partial = account.partial.filter((key) => !selected.includes(key));
     });
   }
 
-  /** Collections selected since the rows were written: loaded once the account is up to date. */
+  /**
+   * Collections selected since the rows were written (or loaded or dropped
+   * only in part): loaded once the account is up to date. A collection is
+   * `partial` from before its first chunk until its last one makes it
+   * `selected`, so deselected again after a stop, its rows are dropped.
+   */
   protected async loadNewlySelected(acct: string): Promise<void> {
     const account = this.env.store.account(acct);
     if (!account.itemsState || account.reconcile) return;
@@ -479,9 +485,16 @@ export abstract class ItemSync {
       if (this.env.store.account(acct).selected.includes(key)) continue;
       await this.env.checkpoints.check('select');
       const ids = await this.env.jmap.queryAll(this.itemType, acct, { [this.parentFilter]: collection });
+      if (!(this.env.store.account(acct).partial ?? []).includes(key)) {
+        await this.env.writer.write([], this.tail([acct], (next) => {
+          const a = accountOf(next, acct);
+          a.partial = [...new Set([...(a.partial ?? []), key])];
+        }));
+      }
       await this.processIds(acct, ids, [], (next) => {
         const a = accountOf(next, acct);
         if (!a.selected.includes(key)) a.selected.push(key);
+        a.partial = (a.partial ?? []).filter((k) => k !== key);
       });
     }
   }

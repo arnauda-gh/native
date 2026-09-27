@@ -125,7 +125,14 @@ describe('device sync engine: calendar', () => {
     expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `a/${review}`, type: 'tooLarge' })]);
     expect(calendarRow(h, work)).toBeDefined();
     expect(titles(h)).toEqual(['Code review']);
-    expect(h.state(CALENDAR_AUTHORITY)?.accounts.a.selected).toEqual([`a/${h.calendar}`, `a/${work}`]);
+    // Not complete any more (selected again, it is loaded again); its row is dropped again next run.
+    expect(h.state(CALENDAR_AUTHORITY)?.accounts.a.selected).toEqual([`a/${h.calendar}`]);
+
+    h.clock.now += 2 * 3_600_000;
+    await h.run(CALENDAR_AUTHORITY);
+
+    expect(h.server.get('CalendarEvent', 'a', review)).toMatchObject({ title: 'Code review' });
+    expect(calendarRow(h, work)).toBeUndefined();
   });
 
   it('marks a calendar that mirrors a feed subscription read-only', async () => {

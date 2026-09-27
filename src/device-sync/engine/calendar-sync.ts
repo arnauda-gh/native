@@ -546,7 +546,10 @@ export class CalendarSync extends ItemSync {
   /**
    * Deselected calendars lose their rows (the provider deletes their events)
    * once nothing in them waits for an upload; until then only their clean
-   * events go. Events that left every synced calendar go when clean.
+   * events go, and the calendar row is dropped again next run. A calendar
+   * leaves `selected` before its first row goes: stopped half-way and
+   * selected again, it is loaded again. Events that left every synced
+   * calendar go when clean.
    */
   protected async dropOutsideSelection(acct: string): Promise<void> {
     const synced = new Set(this.syncedCollections(acct).map((id) => collectionKey(acct, id)));
@@ -554,12 +557,15 @@ export class CalendarSync extends ItemSync {
     const rows = this.deleteRows.filter((row) => accountOfRef(this.keyByRow.get(row) ?? null) === acct);
     const outside = [...(this.outside.get(acct) ?? [])];
     if (!deselected.length && !rows.length && !outside.length) return;
-    const kept = new Set<string>();
+    if (deselected.length) {
+      await this.env.writer.write([], this.tail([acct], (next) => {
+        const a = accountOf(next, acct);
+        a.selected = a.selected.filter((key) => !deselected.includes(key));
+      }));
+    }
     for (const rowId of rows) {
       await this.env.checkpoints.check('deselect');
-      const key = this.keyByRow.get(rowId) as string;
-      if (await this.dropCalendarRow(rowId)) continue;
-      kept.add(key);
+      await this.dropCalendarRow(rowId);
     }
     const works: Work[] = [];
     for (const local of (await this.eventKind.loadByRefs(outside)).values()) {
@@ -569,9 +575,11 @@ export class CalendarSync extends ItemSync {
       const work = this.removeWork(acct, id, { kind: this.eventKind, local }, 'outside');
       if (work) works.push(work);
     }
-    const selected = [...synced, ...kept];
+    // Every synced calendar was loaded before this pass; the others go with their calendar rows.
     await this.env.writer.write(works, this.tail([acct], (next) => {
-      accountOf(next, acct).selected = selected;
+      const a = accountOf(next, acct);
+      a.selected = [...synced];
+      if (a.partial) a.partial = [];
     }));
     this.outside.delete(acct);
   }

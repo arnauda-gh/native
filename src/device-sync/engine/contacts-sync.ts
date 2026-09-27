@@ -761,12 +761,15 @@ export class ContactsSync extends ItemSync {
   /**
    * After the upload: rows of contacts in no synced address book go, when
    * clean (a deselected book, or a card moved away on the server). Dirty
-   * ones stay until their upload succeeds, and keep their book selected.
+   * ones stay until their upload succeeds, and keep their book `partial`,
+   * so the next run drops it again. A book is `partial` from before its
+   * first dropped row until the last: a stop half-way leaves it to load
+   * again when it is selected again, or to drop again when it is not.
    */
   protected async dropOutsideSelection(acct: string): Promise<void> {
     const synced = new Set(this.syncedCollections(acct).map((id) => collectionKey(acct, id)));
     const committed = this.env.store.account(acct);
-    const deselected = committed.selected.filter((key) => !synced.has(key));
+    const deselected = [...new Set([...committed.selected, ...(committed.partial ?? [])])].filter((key) => !synced.has(key));
     const outside = [...(this.outside.get(acct) ?? [])];
     if (!deselected.length && !outside.length) return;
 
@@ -781,6 +784,11 @@ export class ContactsSync extends ItemSync {
       else for (const key of meta.collections) if (deselected.includes(key)) kept.add(key);
     };
     if (deselected.length) {
+      await this.env.writer.write([], this.tail([acct], (next) => {
+        const a = accountOf(next, acct);
+        a.selected = a.selected.filter((key) => !deselected.includes(key));
+        a.partial = [...new Set([...(a.partial ?? []), ...deselected])];
+      }));
       const groupWorks: Work[] = [];
       for (const group of await this.loadGroupsWhere('sourceid LIKE ?', [`${acct}/%`])) consider({ kind: this.groupKind, local: group }, groupWorks);
       await this.env.writer.write(groupWorks);
@@ -794,10 +802,11 @@ export class ContactsSync extends ItemSync {
         }
         await this.env.writer.write(works);
       }
-      const selected = [...synced, ...kept];
-      // The book leaves `selected` with its last dropped row; one still holding a dirty item stays.
+      // Every synced book was loaded before this pass; a book still holding a dirty item stays partial.
       await this.env.writer.write([], this.tail([acct], (next) => {
-        accountOf(next, acct).selected = selected;
+        const a = accountOf(next, acct);
+        a.selected = [...synced];
+        a.partial = [...kept];
       }));
     } else {
       const works: Work[] = [];

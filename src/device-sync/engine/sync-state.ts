@@ -25,8 +25,13 @@ export interface AccountState {
   collectionsState: string | null;
   /** ContactCard / CalendarEvent state the rows describe. */
   itemsState: string | null;
-  /** Collection keys the rows were written for. */
+  /** Collection keys whose rows are all on the device. */
   selected: string[];
+  /**
+   * Collection keys whose rows may be on the device in part: a load or a drop that has not ended. Selected, such
+   * a collection is loaded again; deselected, it is dropped again.
+   */
+  partial?: string[];
   /** Object ids whose rows could not be written; fetched again at the start of every run, nothing uploads for them meanwhile. */
   stale: string[];
   /**
@@ -86,6 +91,7 @@ function parseAccount(value: unknown): AccountState {
     stale: strings(a.stale),
     reconcile: parseReconcile(a.reconcile),
   };
+  if (a.partial !== undefined) out.partial = strings(a.partial);
   if (a.created !== undefined) out.created = strings(a.created);
   if (a.groups !== undefined) out.groups = strings(a.groups);
   if (a.taskOnly !== undefined) out.taskOnly = strings(a.taskOnly);
