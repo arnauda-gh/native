@@ -1,0 +1,328 @@
+// The engine's building blocks on their own: provider batches, the
+// SyncState blob, the run lock, SetError handling, query paging, the auth
+// rebuild and how failures map to outcomes.
+
+import { describe, expect, it, vi } from 'vitest';
+import { BatchWriter, buildBatch, prependOps, type Work } from '../../engine/batch';
+import { classifyFailure, RunAbort, StateMismatch, StopRun } from '../../engine/errors';
+import { acquireLock } from '../../engine/mutex';
+import { isBackedOff, nextMarker } from '../../engine/poison';
+import { collectionDefaultOn, isCollectionSelected } from '../../engine/selection';
+import { emptySyncState, parseSyncState, serializeSyncState, StateStore } from '../../engine/sync-state';
+import { classifySetError, existingIdFromUidError, JmapCaller } from '../../jmap/caller';
+import { openWithAuthRebuild } from '../../jmap/connection';
+import { JMAPMethodError } from '../../jmap/errors';
+import { accountsWithCapability, calendarAddresses } from '../../jmap/session';
+import { JMAP_CALENDARS, JMAP_CONTACTS, type BatchResult, type ProviderOp, type ProviderPort } from '../../types';
+import { FakeJmapServer } from '../fakes/fake-jmap-server';
+
+function port(apply: (ops: ProviderOp[]) => BatchResult | Promise<BatchResult>): ProviderPort & { sent: ProviderOp[][] } {
+  const sent: ProviderOp[][] = [];
+  return {
+    accountName: 'x',
+    authority: 'com.android.contacts',
+    sent,
+    query: async () => ({ columns: [], rows: [] }),
+    readSyncState: async () => null,
+    readPhoto: async () => null,
+    applyBatch: async (ops) => {
+      sent.push(ops);
+      return apply(ops);
+    },
+  };
+}
+
+const ok = (ops: ProviderOp[]): BatchResult => ({ ok: true, results: ops.map(() => ({ count: 1 })) });
+const insert = (table: 'raw_contacts' | 'data', values: Record<string, string> = {}): ProviderOp => ({ op: 'insert', table, values });
+const writer = (p: ProviderPort, options: Partial<{ maxOps: number; maxBytes: number; maxReplans: number }> = {}) =>
+  new BatchWriter(p, { maxOps: 400, maxBytes: 300_000, maxReplans: 3, ...options });
+
+describe('provider batches', () => {
+  it('rebases refs, makes each group start at a yield point and puts the state op last', () => {
+    const group = { ref: 'g', ops: [insert('raw_contacts'), { op: 'insert', table: 'data', values: {}, refs: { raw_contact_id: 0 }, yieldAllowed: true } as ProviderOp] };
+
+    const ops = buildBatch([group, group], { op: 'syncState', value: '{}', yieldAllowed: true } as ProviderOp);
+
+    expect(ops.map((op) => (op as { yieldAllowed?: boolean }).yieldAllowed ?? false)).toEqual([true, false, true, false, false]);
+    expect((ops[3] as { refs: Record<string, number> }).refs).toEqual({ raw_contact_id: 2 });
+    expect(ops[4]).toEqual({ op: 'syncState', value: '{}' });
+  });
+
+  it('prepends ops to a group, shifting its refs', () => {
+    const group = prependOps({ ref: 'g', ops: [insert('raw_contacts'), { op: 'insert', table: 'data', values: {}, refs: { raw_contact_id: 0 } }] }, [
+      { op: 'assert', table: 'raw_contacts', where: 'sourceid = ?', args: ['a/1'], expectCount: 0 },
+    ]);
+    expect((group.ops[2] as { refs: Record<string, number> }).refs).toEqual({ raw_contact_id: 1 });
+  });
+
+  it('never splits a group, keeps batches within the op budget and sends photo groups alone', async () => {
+    const p = port(ok);
+    const works: Work[] = [
+      ...Array.from({ length: 5 }, (_, i) => ({ group: { ref: `g${i}`, ops: [insert('raw_contacts'), insert('data'), insert('data')] } })),
+      { group: { ref: 'photo', ops: [{ op: 'insert', table: 'data', values: { data15: { b64: 'AAAA' } } }] } },
+      { group: { ref: 'g5', ops: [insert('raw_contacts')] } },
+    ];
+
+    await writer(p, { maxOps: 7 }).write(works, { op: () => ({ op: 'syncState', value: 's' }), applied: () => undefined });
+
+    expect(p.sent.map((b) => b.length)).toEqual([6, 6, 3, 1, 2]);
+    expect(p.sent[3]).toEqual([expect.objectContaining({ values: { data15: { b64: 'AAAA' } } })]);
+    expect(p.sent[4][1]).toEqual({ op: 'syncState', value: 's' });
+  });
+
+  it('retries the groups of a failed batch one by one and re-plans a failed assert at most three times', async () => {
+    let failing = 5;
+    const p = port((ops) =>
+      ops.some((op) => op.op === 'assert') && failing-- > 0 ? { ok: false, reason: 'assert', message: 'stale' } : ok(ops),
+    );
+    const applied: string[] = [];
+    const failed = vi.fn();
+    let replans = 0;
+    const stale: Work = {
+      group: { ref: 'stale', ops: [{ op: 'assert', table: 'raw_contacts', id: 1, values: { version: 1 } }, insert('data')] },
+      applied: () => {
+        applied.push('stale');
+      },
+      failed,
+    };
+    stale.replan = async () => {
+      replans++;
+      return stale;
+    };
+    const fine: Work = {
+      group: { ref: 'fine', ops: [insert('raw_contacts')] },
+      applied: () => {
+        applied.push('fine');
+      },
+    };
+    const tail = { op: () => ({ op: 'syncState', value: 's' }) as ProviderOp, applied: vi.fn() };
+
+    await writer(p).write([fine, stale], tail);
+
+    expect(applied).toEqual(['fine']);
+    expect(replans).toBe(3);
+    expect(failed).toHaveBeenCalledWith('assert', 'stale');
+    expect(tail.applied).toHaveBeenCalledOnce();
+    expect(p.sent.at(-1)).toEqual([{ op: 'syncState', value: 's' }]);
+  });
+
+  it('splits a batch the Binder refused (tooLarge) and gives up a single group that is too large', async () => {
+    const p = port((ops) => (ops.length > 2 ? { ok: false, reason: 'tooLarge', message: 'TransactionTooLargeException' } : ok(ops)));
+    const failed = vi.fn();
+    const works: Work[] = [
+      ...Array.from({ length: 4 }, (_, i) => ({ group: { ref: `g${i}`, ops: [insert('raw_contacts')] } })),
+      { group: { ref: 'big', ops: [insert('raw_contacts'), insert('data'), insert('data')] }, failed },
+    ];
+
+    await writer(p).write(works);
+
+    expect(failed).toHaveBeenCalledWith('tooLarge', 'TransactionTooLargeException');
+    expect(p.sent.filter((b) => b.length <= 2).flat()).toHaveLength(4);
+  });
+
+  it('ends the run when the permission is gone and refuses to retry an op outside the account', async () => {
+    const denied = port(() => ({ ok: false, reason: 'permission', message: 'SecurityException' }));
+    await expect(writer(denied).write([{ group: { ref: 'g', ops: [insert('raw_contacts')] } }])).rejects.toMatchObject({ outcome: 'permission' });
+    const scope = port(() => ({ ok: false, reason: 'scope', message: 'not our account' }));
+    await expect(writer(scope).write([{ group: { ref: 'g', ops: [insert('raw_contacts')] } }])).rejects.toThrow(/not our account/);
+  });
+
+  it('skips groups that only assert', async () => {
+    const p = port(ok);
+    await writer(p).write([{ group: { ref: 'g', ops: [{ op: 'assert', table: 'raw_contacts', id: 1, values: { dirty: 0 } }] } }]);
+    expect(p.sent).toEqual([]);
+  });
+});
+
+describe('SyncState', () => {
+  it('round-trips and tolerates missing parts', () => {
+    const state = emptySyncState();
+    state.owner = { registryId: 'r', origin: 'https://o' };
+    state.accounts.a = { collectionsState: 's1', itemsState: 's2', selected: ['a/b'], stale: ['c1'], reconcile: null, groups: ['a/g'] };
+    state.deviceZone = 'Europe/Berlin';
+
+    expect(parseSyncState(serializeSyncState(state))).toEqual({ state, readable: true });
+    expect(parseSyncState(JSON.stringify({ v: 1, accounts: { a: { itemsState: 'x' } } })).state.accounts.a).toEqual({
+      collectionsState: null,
+      itemsState: 'x',
+      selected: [],
+      stale: [],
+      reconcile: null,
+    });
+  });
+
+  it('starts over when the blob is unreadable or of another version', () => {
+    expect(parseSyncState('{nope').readable).toBe(false);
+    expect(parseSyncState(JSON.stringify({ v: 2, accounts: {} })).readable).toBe(false);
+    expect(parseSyncState(null)).toEqual({ state: emptySyncState(), readable: true });
+    expect(parseSyncState('')).toEqual({ state: emptySyncState(), readable: true });
+  });
+
+  it('adopts a proposed state only after its batch applied', () => {
+    const store = new StateStore(emptySyncState(), { registryId: 'r', origin: 'o' });
+    const tail = store.tail((next) => {
+      next.deviceZone = 'UTC';
+    });
+    const op = tail.op();
+    expect(store.committed.deviceZone).toBeUndefined();
+    expect(JSON.parse((op as { value: string }).value)).toMatchObject({ deviceZone: 'UTC', owner: { registryId: 'r' } });
+    tail.applied();
+    expect(store.committed.deviceZone).toBe('UTC');
+  });
+});
+
+describe('run lock', () => {
+  it('serialises holders and hands on the turn of a waiter that gave up', async () => {
+    const order: string[] = [];
+    const first = await acquireLock('k');
+    const second = acquireLock('k', 10);
+    const third = acquireLock('k');
+    expect(await second).toBeNull();
+    first!();
+    const release = await third;
+    order.push('third');
+    release!();
+    expect(order).toEqual(['third']);
+    const again = await acquireLock('k', 10);
+    expect(again).not.toBeNull();
+    again!();
+  });
+});
+
+describe('poison markers', () => {
+  it('backs off an hour, doubling to a day, while the item stays the same', () => {
+    const first = nextMarker(null, 'fp', { type: 'invalidPatch' }, 0, { firstMs: 3_600_000, maxMs: 86_400_000 });
+    const second = nextMarker(first, 'fp', { type: 'invalidPatch' }, 0, { firstMs: 3_600_000, maxMs: 86_400_000 });
+    let marker = second;
+    for (let i = 0; i < 10; i++) marker = nextMarker(marker, 'fp', { type: 'invalidPatch' }, 0, { firstMs: 3_600_000, maxMs: 86_400_000 });
+    expect([first.until, second.until, marker.until]).toEqual([3_600_000, 7_200_000, 86_400_000]);
+    expect(nextMarker(second, 'changed', { type: 'invalidPatch' }, 0, { firstMs: 1, maxMs: 10 }).n).toBe(1);
+    expect(isBackedOff(first, 'fp', 1)).toBe(true);
+    expect(isBackedOff(first, 'other', 1)).toBe(false);
+    expect(isBackedOff(first, 'fp', 3_600_001)).toBe(false);
+  });
+});
+
+describe('JMAP side', () => {
+  it('classifies SetErrors', () => {
+    expect(classifySetError({ type: 'notFound' }, 'update')).toBe('notFound');
+    expect(classifySetError({ type: 'forbidden' }, 'destroy')).toBe('forbidden');
+    expect(classifySetError({ type: 'invalidProperties', properties: ['uid'] }, 'create')).toBe('uidExists');
+    expect(classifySetError({ type: 'invalidProperties', properties: ['uid'] }, 'update')).toBe('poison');
+    expect(classifySetError({ type: 'overQuota' }, 'create')).toBe('poison');
+    expect(existingIdFromUidError({ type: 'invalidProperties', description: 'Contact with UID u1 already exists with id c5.' })).toBe('c5');
+    expect(existingIdFromUidError({ type: 'invalidProperties', description: 'An event with UID u1 already exists.' })).toBeNull();
+  });
+
+  it('pages /query by position until the total, with overlapping pages', async () => {
+    const server = new FakeJmapServer();
+    server.addAccount('a', { name: 'alice@example.com' });
+    const book = server.addAddressBook('a', { name: 'Personal' });
+    for (let i = 0; i < 30; i++) server.addCard('a', { uid: `u${i}` });
+    server.setLimits({ maxQueryResults: 8 });
+    const caller = new JmapCaller(server.port(), () => 0);
+
+    const ids = await caller.queryAll('ContactCard', 'a', { inAddressBook: book });
+
+    expect(ids).toHaveLength(30);
+    expect(server.calls('ContactCard/query').length).toBeGreaterThan(3);
+  });
+
+  it('looks uids up in one query and maps them back', async () => {
+    const server = new FakeJmapServer();
+    server.addAccount('a', { name: 'alice@example.com' });
+    const book = server.addAddressBook('a', { name: 'Personal' });
+    const other = server.addAddressBook('a', { name: 'Other' });
+    const c1 = server.addCard('a', { uid: 'u1', addressBookIds: { [book]: true } });
+    server.addCard('a', { uid: 'u2', addressBookIds: { [other]: true } });
+    const caller = new JmapCaller(server.port(), () => 0);
+
+    const found = await caller.lookupUids('ContactCard', 'a', ['u1', 'u2', 'u3'], book);
+
+    expect([...found]).toEqual([['u1', [c1]]]);
+  });
+
+  it('names the accounts with a capability, the primary first', () => {
+    const server = new FakeJmapServer();
+    server.addAccount('team', { name: 'Team', isPersonal: false, capabilities: ['contacts'] });
+    server.addAccount('a', { name: 'alice@example.com' });
+    const session = server.port().session();
+
+    expect(accountsWithCapability(session, JMAP_CONTACTS).map((a) => [a.id, a.primary, a.personal])).toEqual([
+      ['a', true, true],
+      ['team', false, false],
+    ]);
+    expect(accountsWithCapability(session, JMAP_CALENDARS).map((a) => a.id)).toEqual(['a']);
+  });
+
+  it('takes the login as the owner address and survives a server without identities', async () => {
+    const server = new FakeJmapServer();
+    server.addAccount('a', { name: 'Alice@Example.com' });
+    const addresses = await calendarAddresses(new JmapCaller(server.port(), () => 0), 'fallback');
+    expect(addresses).toEqual({ ownerAccount: 'alice@example.com', selfAddresses: ['alice@example.com'] });
+  });
+
+  it('rebuilds the connection once when the credentials are rejected', async () => {
+    const server = new FakeJmapServer();
+    server.addAccount('a', { name: 'alice@example.com' });
+    const load = vi.fn(async () => ({ port: server.port(), origin: 'o' }));
+    const connection = await openWithAuthRebuild(load);
+    server.failNextRequest('auth');
+
+    await connection.port.request([['Core/echo', {}, '0']], ['urn:ietf:params:jmap:core']);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    server.failNextRequest('auth');
+    await expect(connection.port.request([['Core/echo', {}, '0']], ['urn:ietf:params:jmap:core'])).rejects.toMatchObject({ name: 'AuthenticationError' });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('opens with a second client when the first has no session, and gives up after that', async () => {
+    const connection = { port: new FakeJmapServer().port(), origin: 'o' };
+    const loads = [null, connection];
+    await expect(openWithAuthRebuild(async () => loads.shift() ?? null)).resolves.toMatchObject({ origin: 'o' });
+    expect(loads).toEqual([]);
+    const rejected = Object.assign(new Error('401'), { name: 'AuthenticationError' });
+    await expect(openWithAuthRebuild(async () => { throw rejected; })).rejects.toMatchObject({ name: 'AuthenticationError' });
+    await expect(openWithAuthRebuild(async () => null)).rejects.toMatchObject({ name: 'AuthenticationError' });
+    const offline = Object.assign(new Error('offline'), { name: 'NetworkError' });
+    await expect(openWithAuthRebuild(async () => { throw offline; })).rejects.toBe(offline);
+  });
+});
+
+describe('selection defaults', () => {
+  it("syncs the personal account's collections, not shared ones nor the Trusted Senders book, unless chosen", () => {
+    expect(collectionDefaultOn(true, 'com.android.contacts', 'Personal')).toBe(true);
+    expect(collectionDefaultOn(true, 'com.android.contacts', 'Trusted Senders')).toBe(false);
+    expect(collectionDefaultOn(true, 'com.android.calendar', 'Trusted Senders')).toBe(true);
+    expect(collectionDefaultOn(false, 'com.android.contacts', 'Team')).toBe(false);
+    expect(collectionDefaultOn(true, 'com.android.calendar', null)).toBe(true);
+
+    const personal = { id: 'a', personal: true };
+    const trusted = { id: 'ab9', name: 'Trusted Senders' };
+    expect(isCollectionSelected({}, personal, 'com.android.contacts', trusted)).toBe(false);
+    expect(isCollectionSelected({ 'a/ab9': true }, personal, 'com.android.contacts', trusted)).toBe(true);
+    expect(isCollectionSelected({ 'a/ab1': false }, personal, 'com.android.contacts', { id: 'ab1', name: 'Personal' })).toBe(false);
+    expect(isCollectionSelected({ 't/c1': true }, { id: 't', personal: false }, 'com.android.calendar', { id: 'c1' })).toBe(true);
+  });
+});
+
+describe('outcomes', () => {
+  it('maps failures to report outcomes', () => {
+    const named = (name: string, extra: object = {}) => Object.assign(new Error(name), { name, ...extra });
+    expect(classifyFailure(new StopRun('deadline'), 0)).toMatchObject({ outcome: 'cancelled', moreRecordsToGet: true });
+    expect(classifyFailure(new RunAbort('safetyAbort', 'x'), 0)).toMatchObject({ outcome: 'safetyAbort' });
+    expect(classifyFailure(new StateMismatch('a'), 0)).toMatchObject({ outcome: 'io', noProgress: true });
+    expect(classifyFailure(named('AuthenticationError'), 0)).toMatchObject({ outcome: 'auth', authProblem: true });
+    expect(classifyFailure(named('NetworkError'), 0)).toMatchObject({ outcome: 'io' });
+    expect(classifyFailure(named('RequestTimeoutError'), 0)).toMatchObject({ outcome: 'io' });
+    expect(classifyFailure(named('RateLimitError', { retryAfterMs: 5000 }), 10_000)).toMatchObject({ outcome: 'io', delayUntil: 15 });
+    expect(classifyFailure(new JMAPMethodError('serverFail'), 0)).toMatchObject({ outcome: 'io' });
+    expect(classifyFailure(new Error('JMAP request failed: 503 - busy'), 0)).toMatchObject({ outcome: 'io' });
+    expect(
+      classifyFailure(new Error('JMAP request failed: 400 - {"type":"urn:ietf:params:jmap:error:limit","limit":"maxCallsInRequest"}'), 0),
+    ).toMatchObject({ outcome: 'internal' });
+    expect(classifyFailure(Object.assign(new Error('denied'), { code: 'permission' }), 0)).toMatchObject({ outcome: 'permission' });
+    expect(classifyFailure(new TypeError('x is undefined'), 0)).toMatchObject({ outcome: 'internal' });
+  });
+});

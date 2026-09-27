@@ -252,6 +252,11 @@
   "deep_link": {
     "open_failed": "Couldn't open this"
   },
+  "device_sync": {
+    "auth_problem_text": "The server no longer accepts the sign-in of {account}, so its contacts and calendars on this device stopped syncing. Sign in again to resume. Changes made on this device are kept.",
+    "auth_problem_title": "Sign in again to keep syncing",
+    "problem_channel": "Sync problems"
+  },
   "email_composer": {
     "attach_camera": "Camera",
     "attachment_reminder_body": "Your message mentions \"{keyword}\" but no file is attached. Send anyway?",

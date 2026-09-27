@@ -182,6 +182,13 @@ export interface ContactsContext extends MapContext {
   nameForUid(uid: string): string | null;
   /** Group rows by SOURCE_ID, for memberships. */
   groupRowIdBySourceId(sourceId: string): number | null;
+  /**
+   * SOURCE_IDs of the synced group cards whose `members` list this uid: the
+   * server keeps memberships on the group cards, so a contact's
+   * GroupMembership rows need the reverse lookup. The engine always provides
+   * it; without it the planner leaves memberships as they are.
+   */
+  groupsOf?(uid: string): string[];
 }
 
 export interface ContactsPlanner {
@@ -332,7 +339,11 @@ export interface CalendarPlanner {
   /** Deletes the master and its exception rows (a sync-adapter delete does not cascade). */
   planLocalDelete(local: LocalEvent): OpGroup;
   planBaselineHeal(local: LocalEvent): OpGroup | null;
-  /** May return several actions: a "this and following" split is a rule patch plus a create. */
+  /**
+   * May return several actions. For a "this and following" split, the
+   * source's plan is the rule patch plus its pruned overrides; the new series
+   * is a row of its own and goes through claim and create by itself.
+   */
   planUpload(local: LocalEvent, ctx: CalendarContext): UploadPlan<CalendarEventWire>;
   planAccepted(local: LocalEvent, server: CalendarEventWire, ctx: CalendarContext): AcceptedPlan;
   /**
