@@ -708,6 +708,11 @@ export class ContactsSync extends ItemSync {
         this.env.report.itemError({ ref: id ? refOf(acct, id) : 'membership', side: 'upload', type: 'unknownGroup' });
         continue;
       }
+      if (this.isStale(acct, group.sourceId)) {
+        // Its shadow is behind the server: members built from it could undo server changes. The contact stays dirty.
+        this.env.report.itemError({ ref: group.sourceId as string, side: 'upload', type: 'stale', description: 'Waits until the server version could be stored' });
+        continue;
+      }
       let pending = byGroup.get(group.sourceId as string);
       if (!pending) {
         const held: Held = { kind: this.groupKind, local: group };

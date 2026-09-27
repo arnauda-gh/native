@@ -186,6 +186,36 @@ describe('device sync engine with the real planners', () => {
       expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [uid]: true });
     });
 
+    it('waits with a membership edit while the group card is stale, instead of resending its members', async () => {
+      const { h, ada, group } = await adaJoinsFriends();
+      const [bob] = addServerCards(h, ['Bob']);
+      const bobUid = h.server.get('ContactCard', 'a', bob)!.uid as string;
+      // Another client adds Bob; this device cannot store the new version of the group this run.
+      h.server.serverUpdate('ContactCard', 'a', group, { members: { [bobUid]: true } });
+      h.deps.planners = {
+        ...h.deps.planners,
+        contacts: {
+          ...contactsPlanner,
+          planGroupDownload: (card, local, ctx) => {
+            if (card.id === group) throw new Error('cannot store this group now');
+            return contactsPlanner.planGroupDownload(card, local, ctx);
+          },
+        },
+      };
+
+      await h.run();
+
+      const adaUid = h.server.get('ContactCard', 'a', ada)!.uid as string;
+      expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [bobUid]: true });
+      expect(h.contacts().find((c) => c.name === 'Ada Lovelace')).toMatchObject({ dirty: true });
+
+      h.deps.planners = { contacts: contactsPlanner, calendar: calendarPlanner };
+      expect((await h.run()).outcome).toBe('ok');
+
+      expect(h.server.get('ContactCard', 'a', group)!.members).toEqual({ [bobUid]: true, [adaUid]: true });
+      expect(h.contacts().find((c) => c.name === 'Ada Lovelace')).toMatchObject({ dirty: false });
+    });
+
     it('uploads a removal from a group in a run that downloads no contact', async () => {
       const h = real();
       // A keyed phone row shows the editor works in place, so a missing membership row is a removal.
