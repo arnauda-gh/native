@@ -310,6 +310,44 @@ describe('calendar device edits through the engine', () => {
     });
   });
 
+  it('removes an event created in a read-only calendar and reports it', async () => {
+    const h = real({ accounts: 'withShared' });
+    const team = h.server.addCalendar('team', {
+      name: 'Team events',
+      myRights: { mayReadFreeBusy: true, mayReadItems: true, mayWriteAll: false, mayWriteOwn: false, mayUpdatePrivate: false, mayRSVP: false, mayShare: false, mayDelete: false },
+    });
+    h.prefs.calendarSelection[`team/${team}`] = true;
+    await h.run(CALENDAR_AUTHORITY);
+    const teamRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `team/${team}`)!._id);
+
+    const id = h.device.user.insertEvent(teamRow, {
+      [Events.TITLE]: 'Mine',
+      [Events.DTSTART]: Date.UTC(2026, 9, 14, 13),
+      [Events.DTEND]: Date.UTC(2026, 9, 14, 14),
+      [Events.EVENT_TIMEZONE]: 'Europe/Berlin',
+    });
+    const report = await h.run(CALENDAR_AUTHORITY);
+
+    expect(report).toMatchObject({ outcome: 'ok', stats: { uploaded: { created: 0 }, skipped: 1 } });
+    expect(report.itemErrors).toEqual([expect.objectContaining({ ref: `row:${id}`, side: 'upload', type: 'readOnly' })]);
+    expect(h.events().find((e) => Number(e._id) === id)).toBeUndefined();
+    expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
+    // Nothing is left waiting: the next run has nothing to say about it.
+    expect((await h.run(CALENDAR_AUTHORITY)).itemErrors).toEqual([]);
+  });
+
+  it('leaves nothing waiting for turning sync off after an event was created in a read-only calendar', async () => {
+    const h = real({ accounts: 'withShared' });
+    const team = h.server.addCalendar('team', { name: 'Team events', myRights: { mayReadItems: true, mayWriteAll: false, mayWriteOwn: false, mayRSVP: false } });
+    h.prefs.calendarSelection[`team/${team}`] = true;
+    await h.run(CALENDAR_AUTHORITY);
+    const teamRow = Number(h.device.rows('calendars').find((c) => c._sync_id === `team/${team}`)!._id);
+    h.device.user.insertEvent(teamRow, { [Events.TITLE]: 'Mine', [Events.DTSTART]: Date.UTC(2026, 9, 14, 13), [Events.DTEND]: Date.UTC(2026, 9, 14, 14), [Events.EVENT_TIMEZONE]: 'Europe/Berlin' });
+
+    expect(await h.teardown(CALENDAR_AUTHORITY)).toEqual({ pending: 0 });
+    expect(h.server.all('CalendarEvent', 'team')).toEqual([]);
+  });
+
   it('keeps a description and location cleared on one occurrence cleared', async () => {
     const h = real();
     const id = h.server.addEvent('a', {

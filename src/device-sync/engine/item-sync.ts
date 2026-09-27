@@ -912,6 +912,11 @@ export abstract class ItemSync {
       if (plan.kind === 'skip') {
         this.env.report.stats.skipped++;
         this.env.report.itemError({ ref, side: 'upload', type: plan.reason });
+      } else if (plan.kind === 'revert') {
+        // It may not be created where it was made (a read-only calendar): the row goes, and the report says so.
+        this.env.report.stats.skipped++;
+        this.env.report.itemError({ ref, side: 'upload', type: 'readOnly' });
+        works.push(this.planWork(acct, held, 'revert', plan.ops));
       } else if (plan.kind === 'claim' || plan.kind === 'purge' || plan.kind === 'clean') {
         works.push(this.planWork(acct, held, plan.kind, plan.ops));
       }
