@@ -3,7 +3,7 @@
 // left them, end to end. Mapping details are the planner's own tests.
 
 import { describe, expect, it } from 'vitest';
-import { Events } from '../../android-columns';
+import { Events, Reminders } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import { contactsPlanner } from '../../contacts/planner';
 import { CALENDAR_AUTHORITY, createHarness, type Harness } from '../engine/harness';
@@ -56,6 +56,42 @@ describe('calendar device edits through the engine', () => {
     // The rows hold the default, confirmed, and are clean.
     expect(h.events().find((e) => Number(e._id) === created)).toMatchObject({ [Events.STATUS]: 1, [Events.DIRTY]: 0 });
     expect(h.events().filter((e) => e[Events.ORIGINAL_SYNC_ID] === `a/${series}`).map((e) => [e[Events.STATUS], e[Events.DIRTY]])).toEqual([[1, 0]]);
+  });
+
+  it('keeps a reminder changed on one occurrence of a series on the calendar\'s default alerts', async () => {
+    const h = real();
+    h.server.serverUpdate('Calendar', 'a', h.calendar, {
+      defaultAlertsWithTime: { d1: { '@type': 'Alert', trigger: { '@type': 'OffsetTrigger', offset: '-PT15M' }, action: 'display' } },
+    });
+    const id = h.server.addEvent('a', {
+      uid: 'standup-uid',
+      title: 'Standup',
+      start: '2026-09-28T09:00:00',
+      duration: 'PT15M',
+      timeZone: 'Europe/Berlin',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', count: 5 },
+      recurrenceOverrides: { '2026-09-29T09:00:00': { title: 'Standup (late)', start: '2026-09-29T10:00:00' } },
+      useDefaultAlerts: true,
+      calendarIds: { [h.calendar]: true },
+    });
+    await h.run(CALENDAR_AUTHORITY);
+    const minutes = (eventId: unknown) => h.device.rows('reminders').filter((r) => r[Reminders.EVENT_ID] === Number(eventId)).map((r) => Number(r[Reminders.MINUTES]));
+    const master = h.events().find((e) => e[Events._SYNC_ID] === `a/${id}`)!;
+    const exception = () => h.events().find((e) => e[Events.ORIGINAL_SYNC_ID] === `a/${id}`)!;
+    expect([minutes(master._id), minutes(exception()._id)]).toEqual([[15], [15]]);
+
+    h.device.user.setReminders(Number(exception()._id), [{ minutes: 60 }]);
+    expect(await h.run(CALENDAR_AUTHORITY)).toMatchObject({ outcome: 'ok', itemErrors: [], stats: { uploaded: { updated: 1 } } });
+
+    expect(exception()[Events.DIRTY]).toBe(0);
+    expect([minutes(master._id), minutes(exception()._id)]).toEqual([[15], [60]]);
+    const event = h.server.get('CalendarEvent', 'a', id)!;
+    expect(event.useDefaultAlerts).toBe(true);
+    expect((event.recurrenceOverrides as Overrides)['2026-09-29T09:00:00']).toMatchObject({ useDefaultAlerts: false });
+    // Its echo writes nothing.
+    const before = h.batches.log.length;
+    await h.run(CALENDAR_AUTHORITY);
+    expect(h.batches.log.slice(before).filter((ops) => ops.some((op) => op.op !== 'syncState' && op.op !== 'assert'))).toEqual([]);
   });
 
   it('keeps a description and location cleared on one occurrence cleared', async () => {

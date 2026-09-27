@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Attendees, Events } from '../../android-columns';
+import { Attendees, Events, Reminders } from '../../android-columns';
 import { calendarPlanner } from '../../calendar/planner';
 import type { LocalEvent, UploadPlan } from '../../planner';
 import type { CalendarEventWire } from '../../wire';
@@ -159,6 +159,39 @@ describe('calendar planner: recurrence edits made on the device', () => {
       'recurrenceOverrides/2026-10-07T09:00:00/description': null,
       'recurrenceOverrides/2026-10-07T09:00:00/locations': null,
     });
+  });
+
+  it('keeps a reminder changed on one occurrence of a series that uses the calendar\'s default alerts', async () => {
+    const event = weekly();
+    delete event.alerts;
+    event.useDefaultAlerts = true;
+    const { h, id } = await synced(event);
+    const minutes = (eventId: number) => h.fake.rows('reminders', `${Reminders.EVENT_ID} = ?`, [eventId]).map((r) => Number(r[Reminders.MINUTES]));
+    const x = (await h.local('bl'))!.exceptions[0];
+    // The calendar's default (10 minutes) on the series and on its occurrences.
+    expect([minutes(id), minutes(x.eventId)]).toEqual([[10], [10]]);
+    h.fake.user.setReminders(x.eventId, [{ minutes: 60 }]);
+    // A new occurrence edit with its own reminder, too (Etar "this event").
+    const added = h.fake.user.insertException(id, utc('2026-10-14T13:00:00Z'), {
+      [Events.TITLE]: 'Probe weekly', [Events.DTSTART]: utc('2026-10-14T13:00:00Z'), [Events.DTEND]: utc('2026-10-14T14:30:00Z'),
+    });
+    h.fake.user.setReminders(added, [{ minutes: 5 }]);
+    const local = (await h.local('bl'))!;
+    const plan = calendarPlanner.planUpload(local, h.ctx);
+    const server = await accept(h, event, local, plan);
+    const after = (await h.local('bl'))!;
+    expect(after.exceptions.map((e) => [e.recurrenceId, minutes(e.eventId), e.dirty])).toEqual([
+      ['2026-10-07T09:00:00', [60], false],
+      ['2026-10-14T09:00:00', [5], false],
+    ]);
+    // The series and its other occurrences keep the calendar's defaults.
+    expect(server.useDefaultAlerts).toBe(true);
+    expect(minutes(id)).toEqual([10]);
+    expect(calendarPlanner.planDownload(server, after, h.ctx).effect).toBe('none');
+    // Only the occurrences leave the defaults: `useDefaultAlerts` is a property an override can patch.
+    const patch = patchOf(plan).patch;
+    expect(patch['recurrenceOverrides/2026-10-07T09:00:00/useDefaultAlerts']).toBe(false);
+    expect(patch['recurrenceOverrides/2026-10-14T09:00:00']).toMatchObject({ useDefaultAlerts: false });
   });
 
   it('patches an existing override one level deep, never deeper', async () => {

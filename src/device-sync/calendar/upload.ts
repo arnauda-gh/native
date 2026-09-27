@@ -509,6 +509,9 @@ function exceptionChanges(
   }
   if (ctx.reminderOwner === 'device' && (existing || cur.reminders!.length) && remindersDiffer(cur, reference)) {
     values.alerts = reminderChanges(instance, ctx.calendar(calendarId), cur.reminders!, ctx.mintKey).alerts;
+    // An occurrence on the calendar's defaults ignores its own alerts: it leaves them, as a series does
+    // (Stalwart keeps the override's `useDefaultAlerts` as a JSPROP; the series stays on the defaults).
+    if (instance.useDefaultAlerts) values.useDefaultAlerts = false;
     units.add('reminders');
   }
 
