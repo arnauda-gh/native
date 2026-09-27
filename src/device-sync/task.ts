@@ -133,8 +133,11 @@ export function createTaskDeps(): EngineDeps {
       useDeviceSyncStore.getState().recordKnownState(registryId, jmapAccountId, type, state);
     },
     notifyAuthProblem,
+    // Notes like "account d left out" only inform; an exception is worth a
+    // warning (in debug builds every warning puts LogBox over the app).
     log: (message, detail) => {
-      console.warn(`[device-sync] ${message}`, detail instanceof Error ? detail.message : (detail ?? ''));
+      if (detail instanceof Error) console.warn(`[device-sync] ${message}`, detail.message);
+      else console.log(`[device-sync] ${message}`, detail ?? '');
     },
   };
 }
