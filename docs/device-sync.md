@@ -1208,13 +1208,16 @@ LOCATION line for an empty map, which would read back as the series'
 locations); otherwise the override's own value is removed. A cleared colour
 gets the empty colour while the series has one (calcard keeps an empty
 COLOR; the device shows the calendar's colour). Removing every reminder of
-one occurrence can be stored only while the series has no alerts of its own:
+one occurrence can be stored only while the series has no alerts at all:
 the override leaves the calendar's defaults (`useDefaultAlerts: false`) and
 has none. Otherwise the occurrence would show the series' alerts (an
 override is its own VEVENT, and an empty map writes no VALARM), so the
 change is put back and reported as `remindersNotRepresentable`; when the
 occurrence has other changes, those upload and their accepted write puts the
-reminders back.
+reminders back. Stalwart stores a calendar's default alerts on the series
+itself (it returns them in `alerts` next to `useDefaultAlerts: true`), so on
+Stalwart this also applies to a series that uses the defaults (checked on a
+device).
 
 The first override of an event with none sends the whole `recurrenceOverrides`
 map (a patch below a missing property fails).
@@ -1807,10 +1810,12 @@ Known limitations:
 - Google Calendar copies the series' reminders onto an occurrence it edits,
   so that occurrence keeps its own reminders afterwards. A new exception row
   an app inserts without reminders inherits the series' reminders, also when
-  the user removed them all in the app's "this event" editor. Removing every
-  reminder of one occurrence of a series with reminders of its own can't be
-  stored on Stalwart: it is put back and reported
-  (`remindersNotRepresentable`).
+  the user removed them all in the app's "this event" editor (Google
+  Calendar's first edit of an occurrence): they come back without a report,
+  since an editor that copies no reminders looks the same. Removing every
+  reminder of an occurrence that already has its own override can't be
+  stored on Stalwart while the series has any alert (the calendar's defaults
+  included): it is put back and reported (`remindersNotRepresentable`).
 - Etar writes an answer saved together with a move to the old row, so the
   answer is lost with that row.
 - A group card deleted on the device that another client moved out of the
@@ -1911,18 +1916,31 @@ apps or in Stalwart is under [known limitations](#decisions-and-limitations).
   removes and restores the rows without server writes or duplicates; an
   account removed in Android Settings is not added back by the app; signing
   out removes the rows and the Android account.
+- **After the review fixes.** Events and occurrences created in Google
+  Calendar keep the server's status (no "tentative"). A move in Etar saved
+  together with a reminder change, Etar's move of a meeting that lists the
+  user, Google Calendar's "Copy to" plus deletion within one sync, and
+  Etar's "series to single event" each stay the same event on the server
+  (same id and uid, unmapped properties kept). A new event the server
+  deletes before the next download leaves the device; a server deletion wins
+  over a move made offline on the device. A contact or event deleted on the
+  device while another client moved it into a collection the device doesn't
+  sync stays on the server (moved into a synced one, the deletion goes up).
+  A contact created and deleted before any sync is never uploaded or asked
+  about. An occurrence's cleared colour stays cleared; removing the reminders
+  of an occurrence with its own override is put back and reported. Runs that
+  do nothing keep the stored status. A permission denied at the first turn-on
+  keeps sync off with an explanation, a second denial offers the app
+  settings. Uninstalling removes the account and its rows; a reinstall syncs
+  without duplicates. A sync that can't start React Native stops waiting for
+  it, and the row's collection count follows the chooser's fresh list.
 - **Covered by tests only:** contact groups and memberships; photos too
-  large for the device; meetings too big for one transaction; moves between
-  calendars and a series turned into a single event (Etar's delete and
-  insert, meetings included); events and exceptions Google Calendar creates
-  without a status; a device create the server deletes before the next
-  download; a deletion of an object another client moved away meanwhile; a
-  contact created and deleted between two syncs; changes put back because
-  the server can't take them, an occurrence's cleared colour and removed
-  reminders among them; an address edited as one line in AOSP Contacts; the
-  status kept after a run that did nothing; the "Review deletions" question;
-  Bulwark's reminders while the device calendar can't sync; the push rules;
-  and signing out during a turn-on.
+  large for the device; meetings too big for one transaction; changes put
+  back because the server can't take them in read-only collections, answers
+  where none are allowed and moves to another account's calendar; an
+  address edited as one line in AOSP Contacts; the "Review deletions"
+  question; Bulwark's reminders while the device calendar can't sync; the
+  push rules; and signing out during a turn-on.
 
 Scale, with a debug build (JavaScript from Metro in dev mode) on an API 34
 emulator given 4 GB of memory: 2,000 cards and 2,000 events (100 of them
