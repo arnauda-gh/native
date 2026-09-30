@@ -46,4 +46,4 @@ For iOS builds and TestFlight distribution see [docs/ios-release.md](docs/ios-re
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](LICENSE).
+AGPL-3.0-only, with an additional permission to distribute the app through app stores such as the Apple App Store and Google Play. See [LICENSE](LICENSE). Contributions are accepted under the same terms. The permission is provisional until every earlier contributor has agreed to it ([consent request](https://github.com/orgs/bulwarkmail/discussions/1113)); contributions made since 30 September 2026 are already covered.
