@@ -287,14 +287,18 @@ export const TodayHubLayout: Layout = ({ s, p, f, now, height }) => {
 /* Mail and next event                                                      */
 /* ------------------------------------------------------------------------ */
 
-export const MailAndNextLayout: Layout = ({ s, p, f, now, height }) => {
+export const MailAndNextLayout: Layout = ({ s, p, f, now, width, height }) => {
   const tight = height < 140;
   const pad = tight ? 10 : 14;
   const unreadMail = s.mail.inbox.filter((m) => m.unread);
   const unread = Math.max(inboxUnread(s), unreadMail.length);
   const latest = unreadMail[0];
-  const digits = String(unread).length;
+  const digits = f.count(unread).length;
   const big = (tight ? 28 : 36) - (digits >= 4 ? 8 : 0);
+  // "unread" sits beside the number where it fits (a half-width column),
+  // under it otherwise (German, "ungelesen").
+  const unreadLabel = f.t('widgets.mail.unread', 'unread');
+  const labelBeside = digits * big * 0.6 + 4 + textWidth(unreadLabel, 13) <= (width - 2) / 2 - 2 * pad;
 
   const upcoming = s.calendar.supported ? upcomingTimed(s.calendar.events, now) : [];
   const event = upcoming[0];
@@ -325,16 +329,14 @@ export const MailAndNextLayout: Layout = ({ s, p, f, now, height }) => {
           <Txt text={f.t('widgets.mail.inbox', 'Inbox')} color={p.fg} size={14} weight="600" />
         </FlexWidget>
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 4 }}>
-          <TextWidget text={String(unread)} maxLines={1} style={{ color: p.fg, fontSize: big, fontWeight: '700' }} />
-          <Spacer size={4} horizontal />
+          <TextWidget text={f.count(unread)} maxLines={1} style={{ color: p.fg, fontSize: big, fontWeight: '700' }} />
+          {labelBeside ? <Spacer size={4} horizontal /> : null}
           {/* Lines the small label up with the big number's baseline. */}
-          <Txt
-            text={f.t('widgets.mail.unread', 'unread')}
-            color={p.muted}
-            size={13}
-            style={{ paddingBottom: Math.round((big - 13) * 0.27) }}
-          />
+          {labelBeside ? (
+            <Txt text={unreadLabel} color={p.muted} size={13} style={{ paddingBottom: Math.round((big - 13) * 0.27) }} />
+          ) : null}
         </FlexWidget>
+        {labelBeside ? null : <Txt text={unreadLabel} color={p.muted} size={13} />}
         <Spacer />
         {latest ? (
           <FlexWidget {...open(links.message(latest))} style={{ width: 'match_parent' }}>

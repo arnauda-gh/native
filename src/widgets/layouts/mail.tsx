@@ -18,6 +18,7 @@ import {
   Surface,
   Txt,
 } from '../primitives';
+import type { Fmt } from '../format';
 import type { FolderCount } from '../snapshot';
 import type { IconName } from '../icons';
 import type { WidgetPalette } from '../theme';
@@ -28,17 +29,19 @@ function inboxCounts(s: Parameters<Layout>[0]['s']) {
   return { unread: inbox?.unread ?? 0, total: inbox?.total ?? 0 };
 }
 
-function CountText({ p, unread, total }: { p: WidgetPalette; unread: number; total: number }) {
+function CountText({ p, f, unread, total, short }: { p: WidgetPalette; f: Fmt; unread: number; total: number; short?: boolean }) {
   return (
     <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
-      <Txt text={String(unread)} color={p.fg} size={12} weight="600" />
-      <Txt text={` / ${total}`} color={p.muted} size={12} />
+      <Txt text={f.count(unread)} color={p.fg} size={12} weight="600" />
+      {short ? null : <Txt text={` / ${f.count(total)}`} color={p.muted} size={12} />}
     </FlexWidget>
   );
 }
 
-export const InboxLayout: Layout = ({ s, p, f, now, height }) => {
+export const InboxLayout: Layout = ({ s, p, f, now, width, height }) => {
   const compact = height < 190;
+  // At two cells wide the title, count, search and compose do not fit.
+  const narrow = width < 240;
   const headerHeight = compact ? 38 : 44;
   const rowHeight = compact ? MAIL_ROW_HEIGHT.compact : MAIL_ROW_HEIGHT.full;
   const rows = Math.max(1, Math.floor((height - headerHeight) / rowHeight));
@@ -55,8 +58,9 @@ export const InboxLayout: Layout = ({ s, p, f, now, height }) => {
         click={open(links.inbox())}
         trailing={(
           <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <CountText p={p} unread={unread} total={total} />
-            {compact ? null : <GhostIcon p={p} iconName="search" click={open(links.search())} />}
+            <Spacer size={8} horizontal />
+            <CountText p={p} f={f} unread={unread} total={total} short={narrow} />
+            {compact || narrow ? null : <GhostIcon p={p} iconName="search" click={open(links.search())} />}
             <Spacer size={6} horizontal />
             <Fab p={p} iconName="edit" size={compact ? 28 : 32} click={open(links.compose())} />
           </FlexWidget>
@@ -73,7 +77,14 @@ export const InboxLayout: Layout = ({ s, p, f, now, height }) => {
   );
 };
 
-export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
+/**
+ * What a labelled button needs: icon, gap, label and its border. A glyph of
+ * the 13sp label averages a little under half its size; measured against the
+ * emulator, English fits at three cells and German does not.
+ */
+const buttonWidth = (label: string) => 15 + 6 + Math.ceil(label.length * 13 * 0.47) + 2;
+
+export const TriageLayout: Layout = ({ s, p, f, now, width, widgetId, local }) => {
   const candidates = s.mail.inbox.filter((m) => m.unread);
   const current = candidates.find((m) => m.id === local.triageId) ?? candidates[0];
   const { unread } = inboxCounts(s);
@@ -93,16 +104,29 @@ export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
   const position = candidates.indexOf(current) + 1;
   const target = { id: current.id, accountId: current.accountId, jmapAccountId: current.jmapAccountId, widgetId };
   const notice = noticeFor(s.notice, 'archive', 'trash');
+  // Long labels (German at three cells) drop to icons instead of being cut:
+  // first Archive and Delete, then Reply too.
+  const labels = {
+    archive: f.t('widgets.mail.archive', 'Archive'),
+    trash: f.t('widgets.mail.delete', 'Delete'),
+    reply: f.t('widgets.mail.reply', 'Reply'),
+  };
+  const room = width - 2 - 24 - 32 - 18;
+  const allFit = buttonWidth(labels.archive) + buttonWidth(labels.trash) + buttonWidth(labels.reply) <= room;
+  const replyFits = 2 * 32 + buttonWidth(labels.reply) <= room;
   return (
     <Surface p={p} style={{ padding: 12 }}>
       <FlexWidget {...open(links.message(current))} style={{ width: 'match_parent', flex: 1 }}>
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent' }}>
           <Avatar initials={current.initials} color={current.color} size={32} />
           <Spacer size={10} horizontal />
-          <Txt text={current.fromName || current.fromEmail} color={p.fg} size={14} weight="700" />
+          {/* A long name is cut, not the time and position after it. */}
+          <FlexWidget style={{ flex: 1 }}>
+            <Txt text={current.fromName || current.fromEmail} color={p.fg} size={14} weight="700" />
+          </FlexWidget>
           <Spacer size={6} horizontal />
           <Txt text={f.listDate(current.receivedAt, now)} color={p.fg} size={12} weight="600" />
-          <Spacer />
+          <Spacer size={8} horizontal />
           <Txt
             text={f.t('widgets.mail.position', '{index} of {count}', { index: position, count: Math.max(unread, candidates.length) })}
             color={p.muted}
@@ -117,11 +141,11 @@ export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
       {notice ? <NoticeBar p={p} f={f} notice={notice} /> : null}
       <Spacer size={8} />
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
-        <Button p={p} label={f.t('widgets.mail.archive', 'Archive')} iconName="archive" flex={1} click={action('archive', target)} />
+        <Button p={p} label={allFit ? labels.archive : undefined} iconName="archive" flex={1} click={action('archive', target)} />
         <Spacer size={6} horizontal />
-        <Button p={p} label={f.t('widgets.mail.delete', 'Delete')} iconName="trash" flex={1} click={action('trash', target)} />
+        <Button p={p} label={allFit ? labels.trash : undefined} iconName="trash" flex={1} click={action('trash', target)} />
         <Spacer size={6} horizontal />
-        <Button p={p} label={f.t('widgets.mail.reply', 'Reply')} iconName="reply" variant="primary" flex={1} click={open(links.reply(current))} />
+        <Button p={p} label={allFit || replyFits ? labels.reply : undefined} iconName="reply" variant="primary" flex={1} click={open(links.reply(current))} />
         <Spacer size={6} horizontal />
         <Button p={p} iconName="chevronRight" click={action('triageNext', { widgetId, id: current.id })} />
       </FlexWidget>
@@ -129,8 +153,12 @@ export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
   );
 };
 
-export const UnreadCountLayout: Layout = ({ s, p, f }) => {
+export const UnreadCountLayout: Layout = ({ s, p, f, width }) => {
   const { unread, total } = inboxCounts(s);
+  const big = f.count(unread);
+  const bigSize = big.length <= 3 ? 44 : big.length === 4 ? 38 : 32;
+  // The total goes when the two do not fit on one line next to each other.
+  const showTotal = big.length * bigSize * 0.6 + (f.count(total).length + 2) * 15 * 0.55 + 4 <= width - 30;
   const senders = s.mail.inbox.filter((m) => m.unread);
   const faces = senders.slice(0, 3);
   const more = Math.max(0, unread - faces.length);
@@ -143,9 +171,11 @@ export const UnreadCountLayout: Layout = ({ s, p, f }) => {
       </FlexWidget>
       <FlexWidget>
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'flex-end' }}>
-          <TextWidget text={String(unread)} style={{ color: p.fg, fontSize: 44, fontWeight: '700' }} />
-          <Spacer size={4} horizontal />
-          <TextWidget text={`/ ${total}`} style={{ color: p.muted, fontSize: 15, paddingBottom: 8 }} />
+          <TextWidget text={big} maxLines={1} style={{ color: p.fg, fontSize: bigSize, fontWeight: '700' }} />
+          {showTotal ? <Spacer size={4} horizontal /> : null}
+          {showTotal ? (
+            <TextWidget text={`/ ${f.count(total)}`} maxLines={1} style={{ color: p.muted, fontSize: 15, paddingBottom: 8 }} />
+          ) : null}
         </FlexWidget>
         <Txt text={f.t('widgets.mail.unread', 'unread')} color={p.muted} size={13} />
       </FlexWidget>

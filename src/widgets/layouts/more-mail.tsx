@@ -671,7 +671,7 @@ export const TagLayout: Layout = ({ s, p, f, now }) => {
         </FlexWidget>
       </FlexWidget>
       <FlexWidget>
-        <TextWidget text={String(count)} style={{ color: p.fg, fontSize: 44, fontWeight: '700' }} />
+        <TextWidget text={f.count(count)} maxLines={1} style={{ color: p.fg, fontSize: f.count(count).length <= 4 ? 44 : 34, fontWeight: '700' }} />
         <Txt text={label} color={p.muted} size={13} />
       </FlexWidget>
       <Txt text={latest} color={p.muted} size={12} />

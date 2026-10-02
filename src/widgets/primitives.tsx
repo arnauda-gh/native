@@ -337,10 +337,12 @@ export function Header({
       >
         {iconName ? <Icon name={iconName} color={iconColor ?? p.fg} size={16} /> : null}
         {iconName ? <Spacer size={8} horizontal /> : null}
-        <Txt text={title} color={p.fg} size={14} weight="600" />
-        {count ? <Spacer size={6} horizontal /> : null}
-        {count ? <Txt text={count} color={p.muted} size={12} /> : null}
-        <Spacer />
+        {/* The title gives way (truncates) before the actions on the right. */}
+        <FlexWidget style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}>
+          <Txt text={title} color={p.fg} size={14} weight="600" />
+          {count ? <Spacer size={6} horizontal /> : null}
+          {count ? <Txt text={count} color={p.muted} size={12} /> : null}
+        </FlexWidget>
         {trailing}
       </FlexWidget>
       <Divider p={p} />

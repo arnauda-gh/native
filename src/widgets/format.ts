@@ -26,6 +26,8 @@ export interface Fmt {
   /** "in 25 min", "in 2 h", "now". */
   relative: (ms: number, now: number) => string;
   bytes: (n: number) => string;
+  /** A count for a big number: as is below 10,000, then compact ("12K"). */
+  count: (n: number) => string;
 }
 
 function safeFormat(locale: string, options: Intl.DateTimeFormatOptions): (ms: number) => string {
@@ -127,6 +129,20 @@ export function makeFmt(locale: string, hour12: boolean): Fmt {
         i++;
       }
       return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+    },
+    count: (n) => {
+      if (n < 10000) return String(n);
+      // Not Intl's compact notation: German leaves thousands unshortened
+      // ("10.007"), which is what has to fit.
+      const [value, unit] = n >= 1_000_000 ? [n / 1_000_000, 'M'] : [n / 1000, 'K'];
+      const digits = value < 100 ? 1 : 0;
+      let text: string;
+      try {
+        text = new Intl.NumberFormat(locale, { maximumFractionDigits: digits }).format(value);
+      } catch {
+        text = value.toFixed(digits).replace(/\.0$/, '');
+      }
+      return `${text}${unit}`;
     },
   };
 }
