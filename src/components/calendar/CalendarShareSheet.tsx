@@ -102,6 +102,9 @@ export function CalendarShareSheet({ calendar, onShare, onClose }: CalendarShare
   );
 
   const candidates = React.useMemo(() => {
+    // The sheet is mounted with the Calendar tab, before a session may exist
+    // (an offline cold start): nobody to list yet, and no own id to read.
+    if (principals.length === 0) return [];
     const self = ownPrincipalId();
     const q = search.trim().toLowerCase();
     return principals
