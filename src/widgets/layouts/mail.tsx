@@ -250,6 +250,13 @@ export const FolderCountsLayout: Layout = ({ s, p, f, height }) => {
     const count = role === 'drafts' ? folder.total : folder.unread;
     rows.push({ role, name: folder.name, count, strong: role !== 'drafts' && folder.unread > 0 });
   }
+  if (rows.length === 0) {
+    return (
+      <Surface p={p}>
+        <Placeholder p={p} iconName="inbox" title={f.t('widgets.mail.no_folders', 'No folders to show')} click={open(links.inbox())} />
+      </Surface>
+    );
+  }
   const fit = Math.max(1, Math.floor((height - 40) / 31));
   const colors: Record<FolderCount['role'], string> = {
     inbox: p.folder.inbox,

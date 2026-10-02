@@ -206,7 +206,9 @@ export function TaskRow({
   now: number;
   last?: boolean;
 }) {
-  const kind = dueKind(task, now);
+  // A finished task is not overdue: it shows its date.
+  const due = dueKind(task, now);
+  const kind = task.done && due === 'overdue' ? 'later' : due;
   const dueColor = task.done
     ? p.muted
     : kind === 'overdue'

@@ -1282,6 +1282,7 @@
       "in_outbox_short": "{count} waiting",
       "inbox": "Inbox",
       "more_unread": "+{count} more unread",
+      "no_folders": "No folders to show",
       "no_starred": "No starred mail",
       "no_starred_body": "Star a message to keep it here.",
       "no_subject": "(no subject)",
