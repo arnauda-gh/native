@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "עקוב אחר התקדמות הבנייה או הורד את ה-APK ידנית.",
     "severity_deprecated": "חובה",
     "severity_security": "אבטחה",
-    "title": "עדכוני אפליקציה"
+    "title": "עדכוני אפליקציה",
+    "verifying": "מאמת…"
   }
 }

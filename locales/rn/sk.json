@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Sledujte priebeh zostavenia alebo si stiahnite APK ručne.",
     "severity_deprecated": "Povinná",
     "severity_security": "Zabezpečenie",
-    "title": "Aktualizácie aplikácie"
+    "title": "Aktualizácie aplikácie",
+    "verifying": "Overovanie…"
   }
 }

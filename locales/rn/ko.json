@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "빌드 진행 상황을 확인하거나 APK를 직접 다운로드해요.",
     "severity_deprecated": "필수",
     "severity_security": "보안",
-    "title": "앱 업데이트"
+    "title": "앱 업데이트",
+    "verifying": "확인 중…"
   }
 }

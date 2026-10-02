@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "查看构建进度或手动下载 APK。",
     "severity_deprecated": "必需",
     "severity_security": "安全",
-    "title": "应用更新"
+    "title": "应用更新",
+    "verifying": "正在验证…"
   }
 }

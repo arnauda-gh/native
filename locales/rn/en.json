@@ -1184,7 +1184,8 @@
     "release_page_pending_desc": "Watch the build progress or download the APK manually.",
     "severity_deprecated": "Required",
     "severity_security": "Security",
-    "title": "App updates"
+    "title": "App updates",
+    "verifying": "Verifying…"
   },
   "widgets": {
     "attachments": {

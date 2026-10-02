@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Бүтээлтийн явцыг хянах эсвэл APK-г гараар татаж авах.",
     "severity_deprecated": "Заавал",
     "severity_security": "Аюулгүй байдал",
-    "title": "Аппын шинэчлэл"
+    "title": "Аппын шинэчлэл",
+    "verifying": "Шалгаж байна…"
   }
 }

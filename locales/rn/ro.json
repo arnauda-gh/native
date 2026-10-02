@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Urmăriți progresul compilării sau descărcați manual APK-ul.",
     "severity_deprecated": "Obligatorie",
     "severity_security": "Securitate",
-    "title": "Actualizări aplicație"
+    "title": "Actualizări aplicație",
+    "verifying": "Se verifică…"
   }
 }

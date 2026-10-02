@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Kövesd a build folyamatát, vagy töltsd le kézzel az APK-t.",
     "severity_deprecated": "Kötelező",
     "severity_security": "Biztonsági",
-    "title": "Alkalmazásfrissítések"
+    "title": "Alkalmazásfrissítések",
+    "verifying": "Ellenőrzés…"
   }
 }

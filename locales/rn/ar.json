@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "تابع تقدّم البناء أو نزّل ملف APK يدويًا.",
     "severity_deprecated": "إلزامي",
     "severity_security": "أمني",
-    "title": "تحديثات التطبيق"
+    "title": "تحديثات التطبيق",
+    "verifying": "جارٍ التحقق…"
   }
 }

@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Следите за ходом сборки или скачайте APK вручную.",
     "severity_deprecated": "Обязательное",
     "severity_security": "Безопасность",
-    "title": "Обновления приложения"
+    "title": "Обновления приложения",
+    "verifying": "Проверка…"
   }
 }

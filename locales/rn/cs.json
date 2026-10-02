@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Sledujte průběh sestavení nebo si stáhněte APK ručně.",
     "severity_deprecated": "Povinná",
     "severity_security": "Zabezpečení",
-    "title": "Aktualizace aplikace"
+    "title": "Aktualizace aplikace",
+    "verifying": "Ověřování…"
   }
 }

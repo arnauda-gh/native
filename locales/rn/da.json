@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Følg buildets fremskridt, eller download APK'en manuelt.",
     "severity_deprecated": "Påkrævet",
     "severity_security": "Sikkerhed",
-    "title": "Appopdateringer"
+    "title": "Appopdateringer",
+    "verifying": "Verificerer…"
   }
 }

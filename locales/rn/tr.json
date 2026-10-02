@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Derleme ilerlemesini izleyin veya APK'yı elle indirin.",
     "severity_deprecated": "Zorunlu",
     "severity_security": "Güvenlik",
-    "title": "Uygulama güncellemeleri"
+    "title": "Uygulama güncellemeleri",
+    "verifying": "Doğrulanıyor…"
   }
 }

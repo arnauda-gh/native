@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "ビルドの進行状況を確認するか、APK を手動でダウンロードします。",
     "severity_deprecated": "必須",
     "severity_security": "セキュリティ",
-    "title": "アプリのアップデート"
+    "title": "アプリのアップデート",
+    "verifying": "検証中…"
   }
 }

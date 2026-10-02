@@ -1168,7 +1168,8 @@
     "release_page_pending_desc": "Den Build-Fortschritt verfolgen oder die APK manuell herunterladen.",
     "severity_deprecated": "Erforderlich",
     "severity_security": "Sicherheit",
-    "title": "App-Updates"
+    "title": "App-Updates",
+    "verifying": "Wird überprüft…"
   },
   "widgets": {
     "attachments": {

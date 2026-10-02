@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Стежте за перебігом збирання або завантажте APK вручну.",
     "severity_deprecated": "Обов'язкове",
     "severity_security": "Безпека",
-    "title": "Оновлення застосунку"
+    "title": "Оновлення застосунку",
+    "verifying": "Перевірка…"
   }
 }

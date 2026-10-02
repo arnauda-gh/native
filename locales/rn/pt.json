@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Acompanhe o progresso da compilação ou baixe o APK manualmente.",
     "severity_deprecated": "Obrigatória",
     "severity_security": "Segurança",
-    "title": "Atualizações do app"
+    "title": "Atualizações do app",
+    "verifying": "Verificando…"
   }
 }

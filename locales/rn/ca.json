@@ -1168,6 +1168,7 @@
     "release_page_pending_desc": "Seguiu el progrés de la compilació o baixeu l'APK manualment.",
     "severity_deprecated": "Obligatòria",
     "severity_security": "Seguretat",
-    "title": "Actualitzacions de l'aplicació"
+    "title": "Actualitzacions de l'aplicació",
+    "verifying": "S'està verificant…"
   }
 }
