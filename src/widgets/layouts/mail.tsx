@@ -60,9 +60,9 @@ export const InboxLayout: Layout = ({ s, p, f, now, width, height }) => {
           <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Spacer size={8} horizontal />
             <CountText p={p} f={f} unread={unread} total={total} short={narrow} />
-            {compact || narrow ? null : <GhostIcon p={p} iconName="search" click={open(links.search())} />}
+            {compact || narrow ? null : <GhostIcon p={p} iconName="search" size={headerHeight} click={open(links.search())} />}
             <Spacer size={6} horizontal />
-            <Fab p={p} iconName="edit" size={compact ? 28 : 32} click={open(links.compose())} />
+            <Fab p={p} iconName="edit" size={compact ? 28 : 32} slop={compact ? 5 : 6} click={open(links.compose())} />
           </FlexWidget>
         )}
       />
@@ -115,7 +115,9 @@ export const TriageLayout: Layout = ({ s, p, f, now, width, widgetId, local }) =
   const allFit = buttonWidth(labels.archive) + buttonWidth(labels.trash) + buttonWidth(labels.reply) <= room;
   const replyFits = 2 * 32 + buttonWidth(labels.reply) <= room;
   return (
-    <Surface p={p} style={{ padding: 12 }}>
+    // The buttons draw 32dp tall in a 48dp tap area (slop 8), which takes the
+    // gap above them and 8dp of the bottom padding.
+    <Surface p={p} style={{ padding: 12, paddingBottom: 4 }}>
       <FlexWidget {...open(links.message(current))} style={{ width: 'match_parent', flex: 1 }}>
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent' }}>
           <Avatar initials={current.initials} color={current.color} size={32} />
@@ -139,15 +141,14 @@ export const TriageLayout: Layout = ({ s, p, f, now, width, widgetId, local }) =
         {current.preview && !notice ? <Txt text={current.preview} color={p.muted} size={13} lines={2} /> : null}
       </FlexWidget>
       {notice ? <NoticeBar p={p} f={f} notice={notice} /> : null}
-      <Spacer size={8} />
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
-        <Button p={p} label={allFit ? labels.archive : undefined} iconName="archive" flex={1} click={action('archive', target)} />
+        <Button p={p} label={allFit ? labels.archive : undefined} iconName="archive" flex={1} slop={8} click={action('archive', target)} />
         <Spacer size={6} horizontal />
-        <Button p={p} label={allFit ? labels.trash : undefined} iconName="trash" flex={1} click={action('trash', target)} />
+        <Button p={p} label={allFit ? labels.trash : undefined} iconName="trash" flex={1} slop={8} click={action('trash', target)} />
         <Spacer size={6} horizontal />
-        <Button p={p} label={allFit || replyFits ? labels.reply : undefined} iconName="reply" variant="primary" flex={1} click={open(links.reply(current))} />
+        <Button p={p} label={allFit || replyFits ? labels.reply : undefined} iconName="reply" variant="primary" flex={1} slop={8} click={open(links.reply(current))} />
         <Spacer size={6} horizontal />
-        <Button p={p} iconName="chevronRight" click={action('triageNext', { widgetId, id: current.id })} />
+        <Button p={p} iconName="chevronRight" slop={8} click={action('triageNext', { widgetId, id: current.id })} />
       </FlexWidget>
     </Surface>
   );

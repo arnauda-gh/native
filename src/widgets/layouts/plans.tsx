@@ -98,6 +98,8 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
   const pad = height < 140 ? 10 : 14;
   const showPeople = inv.participants.length > 0 && height >= 132;
   const buttonHeight = height < 116 ? 28 : 32;
+  // Tap area of 48dp around the buttons; it takes the bottom padding.
+  const slop = Math.min(pad, Math.round((48 - buttonHeight) / 2));
 
   const label = (
     inv.organizerName
@@ -111,7 +113,7 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
   const notice = noticeFor(s.notice, 'rsvp');
 
   return (
-    <Surface p={p} style={{ padding: pad }}>
+    <Surface p={p} style={{ padding: pad, paddingBottom: pad - slop }}>
       <FlexWidget {...open(links.event(inv))} style={{ flexDirection: 'row', width: 'match_parent' }}>
         <FlexWidget
           style={{
@@ -156,12 +158,13 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
           label={f.t('widgets.invites.accept', 'Accept')}
           flex={1}
           height={buttonHeight}
+          slop={slop}
           click={reply('accepted')}
         />
         <Spacer size={6} horizontal />
-        <Button p={p} label={f.t('widgets.invites.maybe', 'Maybe')} flex={1} height={buttonHeight} click={reply('tentative')} />
+        <Button p={p} label={f.t('widgets.invites.maybe', 'Maybe')} flex={1} height={buttonHeight} slop={slop} click={reply('tentative')} />
         <Spacer size={6} horizontal />
-        <Button p={p} label={f.t('widgets.invites.decline', 'Decline')} flex={1} height={buttonHeight} click={reply('declined')} />
+        <Button p={p} label={f.t('widgets.invites.decline', 'Decline')} flex={1} height={buttonHeight} slop={slop} click={reply('declined')} />
       </FlexWidget>
     </Surface>
   );
@@ -360,7 +363,9 @@ export const FreeTimeLayout: Layout = ({ s, p, f, now, width, height }) => {
   };
 
   return (
-    <Surface p={p} style={{ paddingHorizontal: 14, paddingVertical: tier.pad }}>
+    // The full-width button draws tier.button tall; its tap area also takes
+    // the bottom padding (slop).
+    <Surface p={p} style={{ paddingHorizontal: 14, paddingTop: tier.pad, paddingBottom: tier.button ? 0 : tier.pad }}>
       <FlexWidget
         {...open(links.calendar())}
         style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent', height: FREE_HEADLINE_HEIGHT }}
@@ -427,7 +432,6 @@ export const FreeTimeLayout: Layout = ({ s, p, f, now, width, height }) => {
           </FlexWidget>
         ) : null}
       </FlexWidget>
-      {tier.button ? <Spacer size={tier.gap} /> : null}
       <Spacer />
       {tier.button ? (
         <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
@@ -437,6 +441,8 @@ export const FreeTimeLayout: Layout = ({ s, p, f, now, width, height }) => {
             label={f.t('widgets.free.mail', 'Mail my free times')}
             flex={1}
             height={tier.button}
+            // Above, the tap area takes the gap and any height to spare; below, the padding.
+            slop={{ top: Math.min(tier.pad, tier.gap + Math.max(0, height - freeTierHeight(tier))), bottom: tier.pad }}
             click={mail}
           />
         </FlexWidget>
@@ -481,7 +487,7 @@ export const TasksLayout: Layout = ({ s, p, f, now, height }) => {
         title={f.t('widgets.tasks.title', 'Tasks')}
         count={f.t('widgets.tasks.open_count', '{count} open', { count: openCount })}
         click={open(links.calendar())}
-        trailing={<Fab p={p} iconName="plus" size={compact ? 28 : 32} click={open(links.calendar())} />}
+        trailing={<Fab p={p} iconName="plus" size={compact ? 28 : 32} slop={compact ? 4 : 6} click={open(links.calendar())} />}
       />
       {notice ? (
         <FlexWidget style={{ width: 'match_parent', paddingHorizontal: 8, paddingTop: 6, paddingBottom: 6 }}>
@@ -665,6 +671,8 @@ export const BirthdaysLayout: Layout = ({ s, p, f, now, width, height }) => {
                 variant="primary"
                 iconName="send"
                 label={narrow ? undefined : f.t('widgets.birthdays.send_wishes', 'Send wishes')}
+                // The row is 50dp; the tap area takes its full height.
+                slop={Math.floor((BIRTHDAY_ROW_HEIGHT - 32) / 2)}
                 click={open(links.compose({ to: wish, subject: f.t('widgets.birthdays.wishes_subject', 'Happy birthday!') }))}
               />
             ) : null}

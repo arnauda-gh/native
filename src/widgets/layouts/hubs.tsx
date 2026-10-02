@@ -432,7 +432,7 @@ export const RecentFilesLayout: Layout = ({ s, p, f, now, height }) => {
       title={f.t('widgets.shortcuts.files', 'Files')}
       count={f.t('widgets.files.recent', 'Recently changed')}
       click={open(links.files())}
-      trailing={<GhostIcon p={p} iconName="upload" click={open(links.files())} />}
+      trailing={<GhostIcon p={p} iconName="upload" size={40} click={open(links.files())} />}
     />
   );
   const items = s.files.items;

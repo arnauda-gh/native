@@ -222,6 +222,7 @@ export function Button({
   click,
   height = 32,
   flex,
+  slop = 0,
 }: {
   p: WidgetPalette;
   label?: string;
@@ -230,18 +231,26 @@ export function Button({
   click?: WidgetClick;
   height?: number;
   flex?: number;
+  /**
+   * Transparent tap area above and below the drawn button, so a 32dp button
+   * still takes a 48dp tap. Take the same amount off the spacing around it.
+   */
+  slop?: number | { top: number; bottom: number };
 }) {
   const primary = variant === 'primary';
+  const [slopTop, slopBottom] = typeof slop === 'number' ? [slop, slop] : [slop.top, slop.bottom];
   const fg = primary ? p.primaryFg : p.fg;
-  return (
+  const face = (
     <FlexWidget
-      {...click}
+      {...(slop ? {} : click)}
       style={{
         flexDirection: 'row',
         justifyContent: 'center',
         alignItems: 'center',
         height,
-        ...(flex ? { flex } : { paddingHorizontal: label ? 12 : 0, width: label ? 'wrap_content' : height }),
+        ...(slop && flex
+          ? { width: 'match_parent' as const }
+          : flex ? { flex } : { paddingHorizontal: label ? 12 : 0, width: label ? 'wrap_content' : height }),
         borderRadius: 6,
         backgroundColor: primary ? p.primary : p.bg,
         ...(primary ? {} : { borderWidth: 1, borderColor: p.input }),
@@ -252,6 +261,19 @@ export function Button({
       {label ? <TextWidget text={label} maxLines={1} style={{ color: fg, fontSize: 13, fontWeight: '500' }} /> : null}
     </FlexWidget>
   );
+  if (!slop) return face;
+  return (
+    <FlexWidget
+      {...click}
+      style={{
+        paddingTop: slopTop,
+        paddingBottom: slopBottom,
+        ...(flex ? { flex } : { width: label ? 'wrap_content' : height }),
+      }}
+    >
+      {face}
+    </FlexWidget>
+  );
 }
 
 /** Round primary action (compose, new event), the webmail's floating button. */
@@ -260,15 +282,18 @@ export function Fab({
   iconName,
   size = 32,
   click,
+  slop = 0,
 }: {
   p: WidgetPalette;
   iconName: IconName;
   size?: number;
   click?: WidgetClick;
+  /** Transparent tap area around the button (see Button). */
+  slop?: number;
 }) {
-  return (
+  const face = (
     <FlexWidget
-      {...click}
+      {...(slop ? {} : click)}
       style={{
         width: size,
         height: size,
@@ -279,6 +304,12 @@ export function Fab({
       }}
     >
       <Icon name={iconName} color={p.primaryFg} size={Math.round(size / 2)} />
+    </FlexWidget>
+  );
+  if (!slop) return face;
+  return (
+    <FlexWidget {...click} style={{ padding: slop, justifyContent: 'center', alignItems: 'center' }}>
+      {face}
     </FlexWidget>
   );
 }

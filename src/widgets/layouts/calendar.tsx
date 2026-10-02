@@ -192,7 +192,7 @@ export const AgendaLayout: Layout = ({ s, p, f, now, height }) => {
       iconName="calendar"
       title={f.t('widgets.calendar.agenda', 'Agenda')}
       click={open(links.calendar())}
-      trailing={<Fab p={p} iconName="plus" size={compact ? 28 : 32} click={open(links.calendar())} />}
+      trailing={<Fab p={p} iconName="plus" size={compact ? 28 : 32} slop={compact ? 5 : 6} click={open(links.calendar())} />}
     />
   );
   const days = agendaDays(s.calendar.events, now, 14);
@@ -1008,7 +1008,8 @@ export const UpNextLayout: Layout = ({ s, p, f, now }) => {
     : f.t('widgets.calendar.join', 'Join');
 
   return (
-    <Surface p={p} style={{ padding: 14 }}>
+    // 36dp buttons in a 48dp tap area (slop 6), which takes 6dp of the bottom padding.
+    <Surface p={p} style={{ padding: 14, paddingBottom: 8 }}>
       <FlexWidget {...open(links.event(e))} style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent' }}>
         <OverlapWidget style={{ width: 64, height: 64 }}>
           <SvgWidget svg={ring(left.fraction, p.border, p.primary, 5)} style={{ width: 64, height: 64 }} />
@@ -1040,9 +1041,9 @@ export const UpNextLayout: Layout = ({ s, p, f, now }) => {
       <Spacer />
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
         {e.videoUrl ? (
-          <Button p={p} variant="primary" iconName="video" label={joinLabel} height={36} flex={1} click={open(e.videoUrl)} />
+          <Button p={p} variant="primary" iconName="video" label={joinLabel} height={36} flex={1} slop={6} click={open(e.videoUrl)} />
         ) : (
-          <Button p={p} iconName="calendar" label={f.t('widgets.calendar.open', 'Open')} height={36} flex={1} click={open(links.event(e))} />
+          <Button p={p} iconName="calendar" label={f.t('widgets.calendar.open', 'Open')} height={36} flex={1} slop={6} click={open(links.event(e))} />
         )}
         <Spacer size={8} horizontal />
         <Button
@@ -1051,6 +1052,7 @@ export const UpNextLayout: Layout = ({ s, p, f, now }) => {
           label={f.t('widgets.calendar.running_late', 'Running late')}
           height={36}
           flex={1}
+          slop={6}
           click={open(late)}
         />
       </FlexWidget>
