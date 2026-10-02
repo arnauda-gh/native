@@ -25,6 +25,9 @@ jobs:
     timeout-minutes: 90
     permissions:
       contents: write
+    outputs:
+      version: ${{ steps.export.outputs.version }}
+      uploaded: ${{ steps.upload.outputs.done }}
     env:
       EXPO_NO_TELEMETRY: "1"
       # App Store Connect refuses a CFBundleVersion it has already seen for this
@@ -254,6 +257,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload to TestFlight
+        id: upload
         # The IPA is not attached to the GitHub release: without an Apple device
         # provisioned for it, it is not installable, and TestFlight is the only
         # distribution channel for it.
@@ -271,4 +275,35 @@ jobs:
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
           xcrun altool --upload-app --type ios --file "$IPA" \
             --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID"
+          echo "done=true" >> "$GITHUB_OUTPUT"
           echo "::notice::Uploaded build ${IOS_BUILD_NUMBER} to App Store Connect. Processing usually takes 5-30 minutes before it appears in TestFlight."
+
+  # Puts the upload on the public TestFlight link (README): waits for App Store
+  # Connect to process it, adds it to the external group and submits it for
+  # beta review. On Linux, because most of this job is waiting.
+  public-testflight:
+    needs: build
+    if: needs.build.outputs.uploaded == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install the App Store Connect API key
+        env:
+          ASC_KEY_BASE64: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$ASC_KEY_BASE64" | base64 -d > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          chmod 600 ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Add the build to the public group and submit it for beta review
+        env:
+          ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: node scripts/testflight-public.mjs "${{ needs.build.outputs.version }}" "${{ github.run_number }}"

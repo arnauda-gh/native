@@ -14,6 +14,11 @@
 
 React Native (Expo SDK 54) client for [Bulwark Webmail](https://github.com/bulwarkmail/webmail) - a JMAP-based mail, calendar, and contacts app.
 
+## Try it
+
+- **iPhone and iPad:** join the beta on TestFlight: https://testflight.apple.com/join/rumcjNSp. A new release shows up there once Apple has reviewed it, usually within a day.
+- **Android:** download the APK from the [latest release](https://github.com/bulwarkmail/native/releases/latest).
+
 ## What works today
 
 - Sign in to any JMAP server (e.g. Stalwart)
@@ -30,7 +35,7 @@ React Native (Expo SDK 54) client for [Bulwark Webmail](https://github.com/bulwa
 - iOS builds, but push notifications, client certificates and syncing with the phone's contacts and calendars are Android-only so far
 - S/MIME, plugins, themes - UI stubs only (filters & rules, the vacation responder and file storage are real implementations)
 - Calendar editing is partial; contacts editing is basic
-- No Play Store distribution yet (sideload APK from Releases); iOS ships via TestFlight
+- No Play Store or App Store listing yet: Android is a sideloaded APK, iOS a TestFlight beta (see [Try it](#try-it))
 
 ## Run locally
 
