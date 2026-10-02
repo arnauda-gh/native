@@ -84,7 +84,7 @@ export const InboxLayout: Layout = ({ s, p, f, now, width, height }) => {
  */
 const buttonWidth = (label: string) => 15 + 6 + Math.ceil(label.length * 13 * 0.47) + 2;
 
-export const TriageLayout: Layout = ({ s, p, f, now, width, widgetId, local }) => {
+export const TriageLayout: Layout = ({ s, p, f, now, width, height, widgetId, local }) => {
   const candidates = s.mail.inbox.filter((m) => m.unread);
   const current = candidates.find((m) => m.id === local.triageId) ?? candidates[0];
   const { unread } = inboxCounts(s);
@@ -138,7 +138,10 @@ export const TriageLayout: Layout = ({ s, p, f, now, width, widgetId, local }) =
         <Spacer size={6} />
         <Txt text={current.subject || f.t('widgets.mail.no_subject', '(no subject)')} color={p.fg} size={14} weight="600" />
         {/* The notice takes the preview's place, so the card fits at its smallest. */}
-        {current.preview && !notice ? <Txt text={current.preview} color={p.muted} size={13} lines={2} /> : null}
+        {current.preview && !notice ? (
+          // Two lines at the default size; a taller card shows more of the message.
+          <Txt text={current.preview} color={p.muted} size={13} lines={Math.max(2, Math.floor((height - 125) / 18))} />
+        ) : null}
       </FlexWidget>
       {notice ? <NoticeBar p={p} f={f} notice={notice} /> : null}
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
@@ -193,7 +196,7 @@ export const UnreadCountLayout: Layout = ({ s, p, f, width }) => {
   );
 };
 
-export const LatestMessageLayout: Layout = ({ s, p, f, now }) => {
+export const LatestMessageLayout: Layout = ({ s, p, f, now, height }) => {
   const latest = s.mail.inbox.find((m) => m.unread);
   const { unread } = inboxCounts(s);
   if (!latest) {
@@ -213,6 +216,11 @@ export const LatestMessageLayout: Layout = ({ s, p, f, now }) => {
       <Spacer size={6} />
       <Txt text={latest.fromName || latest.fromEmail} color={p.fg} size={14} weight="700" />
       <Txt text={latest.subject || f.t('widgets.mail.no_subject', '(no subject)')} color={p.fg} size={14} weight="600" lines={2} />
+      {/* Resized taller, the card has room for the start of the message. */}
+      {latest.preview && height >= 260 ? <Spacer size={4} /> : null}
+      {latest.preview && height >= 260 ? (
+        <Txt text={latest.preview} color={p.muted} size={13} lines={Math.floor((height - 190) / 18)} />
+      ) : null}
       <Spacer />
       {unread > 1 ? (
         <Txt text={f.t('widgets.mail.more_unread', '+{count} more unread', { count: unread - 1 })} color={p.muted} size={12} />
