@@ -6,8 +6,9 @@
 
 import { AppState, Platform } from 'react-native';
 import { readRegistry, refreshSnapshot } from './build';
-import { hasPlacedWidgets, updateAllWidgets } from './render';
-import { emptySnapshot, saveSnapshot } from './snapshot';
+import { hasPlacedWidgets, redrawAll } from './render';
+import { emptySnapshot } from './snapshot';
+import { replaceAll } from './state';
 
 /** Refreshes are spaced at least this far apart unless the app is leaving. */
 const MIN_INTERVAL_MS = 45_000;
@@ -20,7 +21,8 @@ async function run(): Promise<void> {
   lastRun = Date.now();
   try {
     if (!(await hasPlacedWidgets())) return;
-    await updateAllWidgets(await refreshSnapshot());
+    await refreshSnapshot();
+    await redrawAll();
   } catch (err) {
     console.warn('[widgets] sync failed', err);
   }
@@ -75,9 +77,8 @@ export async function signOutWidgets(): Promise<void> {
   if (Platform.OS !== 'android') return;
   // Signed out of every account, not merely offline or mid-switch.
   if ((await readRegistry()).accounts.length > 0) return;
-  const snapshot = { ...emptySnapshot(), generatedAt: Date.now() };
-  await saveSnapshot(snapshot);
-  await updateAllWidgets(snapshot);
+  await replaceAll({ ...emptySnapshot(), generatedAt: Date.now() });
+  await redrawAll();
 }
 
 /**
@@ -88,7 +89,8 @@ export async function refreshWidgetsInBackground(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
     if (!(await hasPlacedWidgets(0))) return;
-    await updateAllWidgets(await refreshSnapshot());
+    await refreshSnapshot();
+    await redrawAll();
   } catch (err) {
     console.warn('[widgets] background refresh failed', err);
   }

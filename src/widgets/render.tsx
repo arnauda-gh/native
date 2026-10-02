@@ -12,6 +12,8 @@ import catalog from './catalog.json';
 import { makeFmt } from './format';
 import { loadLocal } from './local-state';
 import { Placeholder, Surface } from './primitives';
+import { serial } from './serial';
+import { readView } from './state';
 import type { WidgetSnapshot } from './snapshot';
 import { DARK, LIGHT, type WidgetPalette } from './theme';
 import type { Layout, WidgetLocalState } from './layouts/types';
@@ -142,14 +144,36 @@ export function renderFor(
 }
 
 /** Redraw every placed widget of every kind from `snapshot`. */
-export async function updateAllWidgets(snapshot: WidgetSnapshot): Promise<void> {
-  if (Platform.OS !== 'android') return;
+async function updateAllWidgets(snapshot: WidgetSnapshot): Promise<void> {
   await Promise.all(WIDGET_NAMES.map((widgetName) =>
     requestWidgetUpdate({
       widgetName,
       renderWidget: async (info) => renderFor(widgetName, snapshot, info, await loadLocal(info.widgetId)),
     }).catch((err) => console.warn(`[widgets] update of ${widgetName} failed`, err)),
   ));
+}
+
+let queued: Promise<void> | null = null;
+
+/**
+ * Redraw every placed widget from the current data. Draws run one at a time
+ * in the widgets' lane and each reads the data when it starts, so the last
+ * one drawn is the newest; calls made while one is still waiting share it.
+ */
+export function redrawAll(): Promise<void> {
+  if (Platform.OS !== 'android') return Promise.resolve();
+  if (queued) return queued;
+  const run = serial(async () => {
+    queued = null;
+    await updateAllWidgets(await readView());
+  });
+  queued = run;
+  return run;
+}
+
+/** One widget's drawing from the current data, for the launcher's own update events. */
+export function drawOne(name: string, info: Pick<WidgetInfo, 'width' | 'height' | 'widgetId'>): Promise<WidgetRepresentation> {
+  return serial(async () => renderFor(name, await readView(), info, await loadLocal(info.widgetId)));
 }
 
 let placedCache: { at: number; value: boolean } | null = null;

@@ -6,22 +6,12 @@
 import type { WidgetTaskHandlerProps } from 'react-native-android-widget';
 import { handleWidgetAction } from './actions';
 import { refreshSnapshot } from './build';
-import { loadLocal, removeLocal } from './local-state';
-import { invalidatePlacedCache, renderFor, updateAllWidgets } from './render';
-import { emptySnapshot, loadSnapshot, type WidgetSnapshot } from './snapshot';
+import { removeLocal } from './local-state';
+import { drawOne, invalidatePlacedCache, redrawAll } from './render';
+import { loadSnapshot } from './snapshot';
 
 /** A snapshot younger than this is drawn as it is; older ones trigger a fetch. */
 const FRESH_MS = 5 * 60 * 1000;
-
-let lastBroadcast = 0;
-
-async function broadcast(snapshot: WidgetSnapshot): Promise<void> {
-  // Every placed widget gets its own periodic update; the first one to finish
-  // a refresh redraws them all, the others would only repeat it.
-  if (snapshot.generatedAt <= lastBroadcast) return;
-  lastBroadcast = snapshot.generatedAt;
-  await updateAllWidgets(snapshot);
-}
 
 export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<void> {
   const { widgetInfo, widgetAction, clickAction, clickActionData, renderWidget } = props;
@@ -32,13 +22,14 @@ export async function widgetTaskHandler(props: WidgetTaskHandlerProps): Promise<
     case 'WIDGET_UPDATE':
     case 'WIDGET_RESIZED': {
       if (widgetAction === 'WIDGET_ADDED') invalidatePlacedCache();
-      const snapshot = (await loadSnapshot()) ?? emptySnapshot();
-      renderWidget(renderFor(name, snapshot, widgetInfo, await loadLocal(widgetInfo.widgetId)));
+      renderWidget(await drawOne(name, widgetInfo));
       if (widgetAction === 'WIDGET_RESIZED') return;
-      if (Date.now() - snapshot.generatedAt < FRESH_MS) return;
-      const fresh = await refreshSnapshot();
-      renderWidget(renderFor(name, fresh, widgetInfo, await loadLocal(widgetInfo.widgetId)));
-      await broadcast(fresh);
+      const stored = await loadSnapshot();
+      if (stored && Date.now() - stored.generatedAt < FRESH_MS) return;
+      // Every placed widget gets its own periodic update; they share one
+      // refresh (see refreshSnapshot) and the redraws that follow collapse.
+      await refreshSnapshot();
+      await redrawAll();
       return;
     }
 

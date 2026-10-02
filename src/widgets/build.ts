@@ -22,10 +22,10 @@ import { addDays, startOfDay } from './format';
 import { startOfWeek } from './derive';
 import { fetchInboxPreview, fetchMailSection, openClient, type MailSection } from './jmap';
 import { normalizeHex } from './theme';
+import { storeRefresh } from './state';
 import {
   emptySnapshot,
   loadSnapshot,
-  saveSnapshot,
   type AccountSummary,
   type Birthday,
   type EventItem,
@@ -439,21 +439,12 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
 }
 
 let inflight: Promise<WidgetSnapshot> | null = null;
-let localChanges = 0;
-
-/**
- * A widget button just edited the stored snapshot. A refresh that started
- * before it read the server before the change, so its result is dropped
- * rather than saved over the edit.
- */
-export function noteLocalChange(): void {
-  localChanges++;
-}
 
 /**
  * Fetch fresh data and store it. Concurrent callers share one run: every
  * placed widget gets its own update broadcast, and they would otherwise each
  * start a refresh. On failure the previous snapshot is returned unchanged.
+ * Changes widget buttons made meanwhile are kept over the result (./state.ts).
  *
  * `after` is for callers that just changed something on the server (a widget
  * button): a run already in flight may have read the server before that
@@ -466,12 +457,11 @@ export async function refreshSnapshot(opts?: { after?: 'change' }): Promise<Widg
   }
   if (inflight) return inflight;
   inflight = (async () => {
-    const changesAtStart = localChanges;
+    const startedAt = Date.now();
     const previous = (await loadSnapshot()) ?? emptySnapshot();
     try {
       const next = await buildSnapshot(previous);
-      if (localChanges !== changesAtStart) return (await loadSnapshot()) ?? next;
-      await saveSnapshot(next);
+      await storeRefresh(next, startedAt);
       return next;
     } catch (err) {
       console.warn('[widgets] refresh failed', err);

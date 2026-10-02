@@ -1,16 +1,19 @@
 // Buttons that act without opening the app: archive / delete / next on the
-// triage card, RSVP on the invitation card, ticking a task. Each one updates
-// the stored snapshot first so every widget redraws at once, then makes the
-// JMAP call, then refreshes from the server; a failed call is undone by that
-// refresh.
+// triage card, RSVP on the invitation card, ticking a task. Each one lays its
+// change over the stored data at once (./state.ts) so every widget redraws
+// without waiting, then makes the JMAP call. A change the server took stays
+// laid over the data until a refresh has caught up with it; one that failed
+// is dropped again, which shows the data as the server last described it.
 
 import { jmapClient } from '../api/jmap-client';
 import type { JMAPClient } from '../api/jmap-client';
-import { noteLocalChange, refreshSnapshot, singletonServes } from './build';
+import { refreshSnapshot, singletonServes } from './build';
 import { markRead, moveTo, openClient, rsvp, setTaskDone } from './jmap';
 import { loadLocal, saveLocal } from './local-state';
-import { updateAllWidgets } from './render';
-import { emptySnapshot, loadSnapshot, saveSnapshot, type MailItem, type WidgetSnapshot } from './snapshot';
+import type { PendingChange } from './pending';
+import { redrawAll } from './render';
+import { serial } from './serial';
+import { currentView, settle, track } from './state';
 
 async function clientFor(registryAccountId: string | null | undefined): Promise<JMAPClient | null> {
   if (!registryAccountId) return null;
@@ -18,52 +21,53 @@ async function clientFor(registryAccountId: string | null | undefined): Promise<
   return openClient(registryAccountId);
 }
 
-async function applyLocally(mutate: (s: WidgetSnapshot) => void): Promise<WidgetSnapshot> {
-  noteLocalChange();
-  const s = (await loadSnapshot()) ?? emptySnapshot();
-  mutate(s);
-  await saveSnapshot(s);
-  await updateAllWidgets(s);
-  return s;
-}
-
-function withoutMessage(s: WidgetSnapshot, id: string): void {
-  const removed = s.mail.inbox.find((m) => m.id === id);
-  const drop = (list: MailItem[]) => list.filter((m) => m.id !== id);
-  s.mail.inbox = drop(s.mail.inbox);
-  s.mail.unified = drop(s.mail.unified);
-  s.mail.starred = drop(s.mail.starred);
-  const inbox = s.mail.folders.find((f) => f.role === 'inbox');
-  if (inbox && removed) {
-    inbox.total = Math.max(0, inbox.total - 1);
-    if (removed.unread) inbox.unread = Math.max(0, inbox.unread - 1);
+/** Lay `change` over the data, run `call`, and keep or drop the change by its answer. */
+async function apply(name: string, change: PendingChange, call: () => Promise<boolean>): Promise<boolean> {
+  const key = await track(change);
+  await redrawAll();
+  let ok = false;
+  try {
+    ok = await call();
+  } catch (err) {
+    console.warn(`[widgets] ${name} failed`, err);
   }
-}
-
-async function afterServerCall(ok: boolean): Promise<void> {
-  if (!ok) console.warn('[widgets] action was not applied on the server');
-  const fresh = await refreshSnapshot({ after: 'change' });
-  await updateAllWidgets(fresh);
+  if (!ok) console.warn(`[widgets] ${name} was not applied on the server`);
+  await settle(key, ok);
+  await redrawAll();
+  // Catch up with the server: confirms a change that went through and picks
+  // up whatever else changed. Offline this fails quickly and keeps the data.
+  await refreshSnapshot({ after: 'change' });
+  await redrawAll();
+  return ok;
 }
 
 type Data = Record<string, unknown>;
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 
+/** The triage card's message after `id`, among what the widget shows now. */
+async function moveTriagePointer(widgetId: number, id: string): Promise<void> {
+  const view = await currentView();
+  const unread = view.mail.inbox.filter((m) => m.unread);
+  const index = unread.findIndex((m) => m.id === id);
+  const next = index >= 0 ? unread[index + 1] ?? unread[index - 1] : undefined;
+  await serial(async () => saveLocal(widgetId, { ...(await loadLocal(widgetId)), triageId: next?.id ?? null }));
+}
+
 export async function handleWidgetAction(name: string, data: Data, widgetId: number): Promise<void> {
   switch (name) {
     case 'refresh':
-      await afterServerCall(true);
+      await refreshSnapshot({ after: 'change' });
+      await redrawAll();
       return;
 
     case 'triageNext': {
-      const s = (await loadSnapshot()) ?? emptySnapshot();
-      const unread = s.mail.inbox.filter((m) => m.unread);
+      const view = await currentView();
+      const unread = view.mail.inbox.filter((m) => m.unread);
       if (unread.length === 0) return;
       const index = unread.findIndex((m) => m.id === data.id);
       const next = unread[(index + 1) % unread.length];
-      const local = await loadLocal(widgetId);
-      await saveLocal(widgetId, { ...local, triageId: next.id });
-      await updateAllWidgets(s);
+      await serial(async () => saveLocal(widgetId, { ...(await loadLocal(widgetId)), triageId: next.id }));
+      await redrawAll();
       return;
     }
 
@@ -72,39 +76,18 @@ export async function handleWidgetAction(name: string, data: Data, widgetId: num
     case 'markRead': {
       const id = str(data.id);
       if (!id) return;
-      if (name === 'markRead') {
-        await applyLocally((s) => {
-          const hit = s.mail.inbox.find((m) => m.id === id);
-          const inbox = s.mail.folders.find((f) => f.role === 'inbox');
-          if (hit?.unread && inbox) inbox.unread = Math.max(0, inbox.unread - 1);
-          for (const list of [s.mail.inbox, s.mail.unified, s.mail.starred]) {
-            for (const m of list) if (m.id === id) m.unread = false;
-          }
-        });
-      } else {
-        // The triage card moves on to the next unread message, not back to
-        // the first one.
-        const before = (await loadSnapshot()) ?? emptySnapshot();
-        const unread = before.mail.inbox.filter((m) => m.unread);
-        const index = unread.findIndex((m) => m.id === id);
-        const next = index >= 0 ? unread[index + 1] ?? unread[index - 1] : undefined;
-        if (typeof data.widgetId === 'number') {
-          await saveLocal(data.widgetId, { ...(await loadLocal(data.widgetId)), triageId: next?.id ?? null });
-        }
-        await applyLocally((s) => withoutMessage(s, id));
-      }
-      let ok = false;
-      try {
-        const client = await clientFor(str(data.accountId));
-        if (client) {
-          ok = name === 'markRead'
-            ? await markRead(client, id, str(data.jmapAccountId))
-            : await moveTo(client, id, name, str(data.jmapAccountId));
-        }
-      } catch (err) {
-        console.warn(`[widgets] ${name} failed`, err);
-      }
-      await afterServerCall(ok);
+      // The triage card moves on to the next unread message, not back to
+      // the first one.
+      if (name !== 'markRead') await moveTriagePointer(widgetId, id);
+      const accountId = str(data.accountId);
+      const jmapAccountId = str(data.jmapAccountId);
+      await apply(name, name === 'markRead' ? { kind: 'markRead', id } : { kind: 'removeMail', id }, async () => {
+        const client = await clientFor(accountId);
+        if (!client) return false;
+        return name === 'markRead'
+          ? markRead(client, id, jmapAccountId)
+          : moveTo(client, id, name, jmapAccountId);
+      });
       return;
     }
 
@@ -112,48 +95,35 @@ export async function handleWidgetAction(name: string, data: Data, widgetId: num
       const id = str(data.id);
       const status = data.status;
       if (!id || (status !== 'accepted' && status !== 'tentative' && status !== 'declined')) return;
-      const before = (await loadSnapshot()) ?? emptySnapshot();
+      const before = await currentView();
       const invitation = before.calendar.invitations.find((i) => i.id === id);
       if (!invitation) return;
-      await applyLocally((s) => {
-        s.calendar.invitations = s.calendar.invitations.filter((i) => i.id !== id);
-        for (const e of s.calendar.events) if (e.serverId === invitation.serverId) e.myStatus = status;
-      });
-      let ok = false;
-      try {
+      await apply('rsvp', { kind: 'rsvp', id, serverId: invitation.serverId, status }, async () => {
         const client = await clientFor(before.activeAccountId);
-        if (client) ok = await rsvp(client, invitation.serverId, invitation.participantId, status, invitation.jmapAccountId);
-      } catch (err) {
-        console.warn('[widgets] rsvp failed', err);
-      }
-      await afterServerCall(ok);
+        return !!client && rsvp(client, invitation.serverId, invitation.participantId, status, invitation.jmapAccountId);
+      });
       return;
     }
 
     case 'toggleTask': {
       const id = str(data.id);
       if (!id) return;
-      const before = (await loadSnapshot()) ?? emptySnapshot();
+      const before = await currentView();
       const task = before.tasks.items.find((t) => t.id === id);
       if (!task) return;
       const done = !task.done;
-      await applyLocally((s) => {
-        for (const t of s.tasks.items) if (t.id === id) t.done = done;
-      });
-      let ok = false;
-      try {
+      await apply('task toggle', { kind: 'task', id, done }, async () => {
         const client = await clientFor(before.activeAccountId);
-        if (client) ok = await setTaskDone(client, task.serverId, done, task.jmapAccountId);
+        if (!client || !(await setTaskDone(client, task.serverId, done, task.jmapAccountId))) return false;
         // In the live app the snapshot's tasks come from the calendar store,
-        // which did not see this change; reload it so the refresh keeps it.
-        if (ok && before.activeAccountId && singletonServes(before.activeAccountId)) {
+        // which did not see this change; reload it before the refresh that
+        // follows reads it, or that refresh would undo the tick.
+        if (client === jmapClient) {
           const { useCalendarStore } = require('../stores/calendar-store') as typeof import('../stores/calendar-store');
-          await useCalendarStore.getState().fetchTasks();
+          await useCalendarStore.getState().fetchTasks().catch(() => undefined);
         }
-      } catch (err) {
-        console.warn('[widgets] task toggle failed', err);
-      }
-      await afterServerCall(ok);
+        return true;
+      });
       return;
     }
 
