@@ -86,8 +86,10 @@ export const links = {
   compose: (params: { to?: string; subject?: string; body?: string } = {}) =>
     `${base}compose${query({ to: params.to, subject: params.subject, body: params.body })}`,
   calendar: () => `${base}calendar`,
-  event: (e: Pick<EventItem, 'serverId' | 'jmapAccountId'>) =>
-    `${base}calendar/event/${enc(e.serverId)}${query({ account: e.jmapAccountId })}`,
+  // `account` is the JMAP account of a shared calendar (as in webmail
+  // permalinks); `appAccount` the signed-in account the event was shown for.
+  event: (e: Pick<EventItem, 'serverId' | 'jmapAccountId' | 'accountId'>) =>
+    `${base}calendar/event/${enc(e.serverId)}${query({ account: e.jmapAccountId, appAccount: e.accountId })}`,
   contacts: () => `${base}contacts`,
   files: () => `${base}files`,
   settings: (tab?: string) => `${base}settings${tab ? `/${enc(tab)}` : ''}`,

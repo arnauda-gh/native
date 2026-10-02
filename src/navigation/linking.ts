@@ -36,8 +36,9 @@ export type DeepLink =
   | { kind: 'scheduled' }
   | { kind: 'search'; query: string }
   // `jmapAccountId`: the JMAP account owning the event (`?account=`), for
-  // one on a calendar shared with the user.
-  | { kind: 'calendar'; eventId?: string; date?: string; jmapAccountId?: string }
+  // one on a calendar shared with the user; `accountId`: the signed-in
+  // account it belongs to (`?appAccount=`, from widgets).
+  | { kind: 'calendar'; eventId?: string; date?: string; jmapAccountId?: string; accountId?: string }
   | { kind: 'contact'; contactId: string }
   | { kind: 'contacts' }
   | { kind: 'files' }
@@ -139,9 +140,13 @@ export function parseDeepLink(url: string): DeepLink | null {
     case 'calendar': {
       if (kind === 'event' && value) {
         const jmapAccountId = search.get('account') ?? undefined;
-        return jmapAccountId
-          ? { kind: 'calendar', eventId: decodeSegment(value), jmapAccountId }
-          : { kind: 'calendar', eventId: decodeSegment(value) };
+        const appAccountId = search.get('appAccount') ?? undefined;
+        return {
+          kind: 'calendar',
+          eventId: decodeSegment(value),
+          ...(jmapAccountId ? { jmapAccountId } : {}),
+          ...(appAccountId ? { accountId: appAccountId } : {}),
+        };
       }
       const date = [kind, value].find((s) => s && /^\d{4}-\d{2}-\d{2}$/.test(s));
       return { kind: 'calendar', date };

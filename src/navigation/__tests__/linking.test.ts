@@ -153,6 +153,21 @@ describe('handleDeepLink', () => {
     expect(usePendingCalendarOpen.getState().consume()).toBeNull();
   });
 
+  it('switches to the signed-in account a widget event link names first', async () => {
+    const navigation = nav();
+    const url = links.event({ serverId: 'j', accountId: 'usera@example.org@mail', jmapAccountId: 'd' });
+    const link = parseDeepLink(url);
+    expect(link).toEqual({ kind: 'calendar', eventId: 'j', jmapAccountId: 'd', accountId: 'usera@example.org@mail' });
+    const switchAccount = vi.fn(async () => true);
+    await handleDeepLink(link!, { navigation: navigation as never, resolveThreadId: async () => null, switchAccount });
+    expect(switchAccount).toHaveBeenCalledWith('usera@example.org@mail');
+    expect(usePendingCalendarOpen.getState().consume()).toMatchObject({ serverId: 'j', accountId: 'd' });
+    // An account that is no longer signed in opens nothing.
+    expect(await handleDeepLink(link!, {
+      navigation: navigation as never, resolveThreadId: async () => null, switchAccount: async () => false,
+    })).toBe(false);
+  });
+
   it('parks the settings tab and opens the Settings tab', async () => {
     const navigation = nav();
     await handleDeepLink(
