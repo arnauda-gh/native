@@ -10,6 +10,7 @@ import { useColors } from '../../theme/colors';
 import { useSettingsStore, type ExternalContentPolicy } from '../../stores/settings-store';
 import { useContactsStore } from '../../stores/contacts-store';
 import { useHasContacts } from '../../lib/capabilities';
+import { isTrustedSendersSyncOn } from '../../lib/trusted-senders';
 import { useLocaleStore } from '../../stores/locale-store';
 
 interface TrustedRow {
@@ -49,9 +50,8 @@ export function ContentSendersSettings() {
 
   useEffect(() => { if (!hydrated) void hydrate(); }, [hydrated, hydrate]);
 
-  // Sync stays off until the user turns it on below (null = never chosen):
-  // opening this pane must not change which senders the viewer trusts.
-  const syncEnabled = !!trustedSendersAddressBook && hasContacts;
+  // On unless the user turned it off below (null = never chosen).
+  const syncEnabled = isTrustedSendersSyncOn(trustedSendersAddressBook, hasContacts);
 
   useEffect(() => {
     if (modalOpen && syncEnabled) void loadTrustedSendersBook();
@@ -179,7 +179,7 @@ export function ContentSendersSettings() {
             description={t('settings.email_behavior.trusted_senders.use_address_book_description', 'Store trusted senders in a dedicated "Trusted Senders" address book so they sync across all your devices')}
           >
             <ToggleSwitch
-              checked={!!trustedSendersAddressBook}
+              checked={syncEnabled}
               onChange={(enabled) => {
                 updateSetting('trustedSendersAddressBook', enabled);
                 if (enabled) void loadTrustedSendersBook();

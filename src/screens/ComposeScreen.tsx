@@ -33,6 +33,8 @@ import { getEmailInitials } from '../lib/avatar-utils';
 import { useContactsStore, type RecipientSuggestion } from '../stores/contacts-store';
 import { useLocaleStore } from '../stores/locale-store';
 import { useSettingsStore } from '../stores/settings-store';
+import { useHasContacts } from '../lib/capabilities';
+import { isTrustedSendersSyncOn } from '../lib/trusted-senders';
 import { useAccountStore } from '../stores/account-store';
 import { useSendUndoStore } from '../stores/send-undo-store';
 import { toast } from '../stores/toast-store';
@@ -477,6 +479,7 @@ export default function ComposeScreen({ route, navigation }: Props) {
   const subAddressDelimiter = useSettingsStore((s) => s.subAddressDelimiter);
   const preferredIdentityIds = useSettingsStore((s) => s.preferredIdentityIds);
   const trustedSendersAddressBook = useSettingsStore((s) => s.trustedSendersAddressBook);
+  const hasContacts = useHasContacts();
   const updateSetting = useSettingsStore((s) => s.updateSetting);
 
   const quoteLabels = React.useMemo<QuoteHeaderLabels>(() => quoteHeaderLabels(t), [t]);
@@ -2130,7 +2133,7 @@ export default function ComposeScreen({ route, navigation }: Props) {
         const contacts = useContactsStore.getState();
         for (const r of [...outgoing.to, ...(outgoing.cc ?? [])]) {
           settings.addTrustedSender(r.email);
-          if (trustedSendersAddressBook) {
+          if (isTrustedSendersSyncOn(trustedSendersAddressBook, hasContacts)) {
             contacts.addToTrustedSendersBook(r.name ? `${r.name} <${r.email}>` : r.email).catch(() => undefined);
           }
         }

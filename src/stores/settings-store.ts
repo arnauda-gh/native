@@ -127,8 +127,8 @@ interface PersistedSettings {
   // Privacy & content
   externalContentPolicy: ExternalContentPolicy;
   trustedSenders: string[];
-  // null = not decided yet and treated as off; only the user's toggle in
-  // Content & Senders turns it on, false = user opted out.
+  // null = not decided yet and treated as on (isTrustedSendersSyncOn);
+  // false = the user turned it off in Content & Senders.
   trustedSendersAddressBook: boolean | null;
   senderFavicons: boolean;
   hideInlineImageAttachments: boolean;

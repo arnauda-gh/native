@@ -12,7 +12,8 @@ import { bodyDocument } from '../lib/email-body-document';
 import { estimateBodyHeight, lastBodyHeight, rememberBodyHeight } from '../lib/body-heights';
 import { parseMailtoUrl } from '../lib/unsubscribe';
 import { fetchInlineImageDataUri } from '../lib/email-export';
-import { isSenderContentTrusted } from '../lib/trusted-senders';
+import { isSenderContentTrusted, isTrustedSendersSyncOn } from '../lib/trusted-senders';
+import { useHasContacts } from '../lib/capabilities';
 import { useSettingsStore } from '../stores/settings-store';
 import { useContactsStore } from '../stores/contacts-store';
 import { useLocaleStore } from '../stores/locale-store';
@@ -527,6 +528,8 @@ export default function EmailBodyView({
   const isSenderTrusted = useSettingsStore((s) => s.isSenderTrusted);
   const addTrustedSender = useSettingsStore((s) => s.addTrustedSender);
   const trustedSendersAddressBook = useSettingsStore((s) => s.trustedSendersAddressBook);
+  const hasContacts = useHasContacts();
+  const syncTrustedSenders = isTrustedSendersSyncOn(trustedSendersAddressBook, hasContacts);
   const emailAlwaysLightMode = useSettingsStore((s) => s.emailAlwaysLightMode);
   const plainTextFont = useSettingsStore((s) => s.plainTextFont);
   const messageSpacing = useSettingsStore((s) => s.messageSpacing);
@@ -540,8 +543,8 @@ export default function EmailBodyView({
   // entries (synced across devices) feed the external-content trust check. We
   // do not create the book here — it is created lazily when a sender is trusted.
   React.useEffect(() => {
-    if (trustedSendersAddressBook && !trustedSendersLoaded) void loadTrustedSendersBook(false);
-  }, [trustedSendersAddressBook, trustedSendersLoaded, loadTrustedSendersBook]);
+    if (syncTrustedSenders && !trustedSendersLoaded) void loadTrustedSendersBook(false);
+  }, [syncTrustedSenders, trustedSendersLoaded, loadTrustedSendersBook]);
   // Most marketing email is authored against a white background, so dark-mode
   // inversion can wreck logos/banners. With this flag the user opts to render
   // emails on a light surface even while the rest of the app is dark; the
@@ -561,7 +564,7 @@ export default function EmailBodyView({
   const text = picked.text;
   const trusted = isSenderContentTrusted(senderEmail, {
     isLocallyTrusted: isSenderTrusted,
-    syncEnabled: trustedSendersAddressBook,
+    syncEnabled: syncTrustedSenders,
     trustedBookEmails: trustedSenderEmails,
   });
 
@@ -721,12 +724,11 @@ export default function EmailBodyView({
   const onLoadImages = () => setAllowOnce(true);
   const onTrustSender = () => {
     if (senderEmail) {
-      // Keep the local allow-list for instant effect. The server-side "Trusted
-      // Senders" address book (synced across devices) is only written when
-      // the user opted into it - otherwise a book would silently appear in
-      // their contacts (matches the webmail).
+      // Keep the local allow-list for instant effect, and file the sender in
+      // the server-side "Trusted Senders" address book (synced across
+      // devices) unless the user turned that off.
       addTrustedSender(senderEmail);
-      if (trustedSendersAddressBook) {
+      if (syncTrustedSenders) {
         void addToTrustedSendersBook(senderEmail).catch(() => {});
       }
       setAllowOnce(true);
