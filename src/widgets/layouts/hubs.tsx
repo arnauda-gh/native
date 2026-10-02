@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { FlexWidget, SvgWidget, TextWidget } from 'react-native-android-widget';
-import { links, open, toggleTask, type WidgetClick } from '../clicks';
+import { links, open, toggleTask } from '../clicks';
 import { dueKind, nextEvent, sortTasks, tasksDueNow, upcomingTimed } from '../derive';
 import { addDays, sameDay, startOfDay, type Fmt } from '../format';
 import { ring, type IconName } from '../icons';
@@ -681,27 +681,6 @@ export const AttachmentsLayout: Layout = ({ s, p, f, now, width, height }) => {
 /* ------------------------------------------------------------------------ */
 
 /** The settings switch (`h-[22px] w-10 rounded-full`), drawn only; taps open settings. */
-function Switch({ p, on, label, click }: { p: WidgetPalette; on: boolean; label: string; click: WidgetClick }) {
-  return (
-    <FlexWidget
-      {...click}
-      accessibilityLabel={label}
-      style={{
-        flexDirection: 'row',
-        justifyContent: on ? 'flex-end' : 'flex-start',
-        alignItems: 'center',
-        width: 40,
-        height: 22,
-        padding: 2,
-        borderRadius: 11,
-        backgroundColor: on ? p.primary : p.mutedBg,
-      }}
-    >
-      <FlexWidget style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: on ? p.primaryFg : p.bg }} />
-    </FlexWidget>
-  );
-}
-
 export const VacationLayout: Layout = ({ s, p, f, width, height }) => {
   const click = open(links.settings('vacation'));
   const v = s.vacation;
@@ -720,7 +699,7 @@ export const VacationLayout: Layout = ({ s, p, f, width, height }) => {
   const pad = 14;
   const avail = height - 2 - 2 * pad;
   const titleLines = textWidth(title, 14, 0.58) > width - 2 - 2 * pad ? 2 : 1;
-  // Switch row, title (~17dp a line plus font padding), status pill.
+  // Icon row, title (~17dp a line plus font padding), status pill.
   const base = 22 + titleLines * 17 + 2 + 19;
   let gapTop = 12;
   let gapPill = 6;
@@ -739,7 +718,9 @@ export const VacationLayout: Layout = ({ s, p, f, width, height }) => {
       <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent' }}>
         <Icon name="beach" color={p.fg} size={20} />
         <Spacer />
-        <Switch p={p} on={v.enabled} label={title} click={click} />
+        {/* Not a switch: the widget cannot turn replies on or off, it opens
+            the settings that do. The pill below says which state it is in. */}
+        <Icon name="chevronRight" color={p.muted} size={16} />
       </FlexWidget>
       <Spacer size={gapTop} />
       <Txt text={title} color={p.fg} size={14} weight="600" lines={titleLines} />

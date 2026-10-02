@@ -500,17 +500,6 @@ const MONTH_CELL_MAX = 48;
 const MONTH_CHIPS_TOP = 13;
 const MONTH_CHIPS_BOTTOM = 8;
 
-function NavButton({ p, iconName }: { p: WidgetPalette; iconName: IconName }) {
-  return (
-    <FlexWidget
-      {...open(links.calendar())}
-      style={{ width: 32, height: 32, borderRadius: 6, justifyContent: 'center', alignItems: 'center' }}
-    >
-      <Icon name={iconName} color={p.fg} size={16} />
-    </FlexWidget>
-  );
-}
-
 function MonthDay({
   p,
   cell,
@@ -604,12 +593,11 @@ export const MonthLayout: Layout = ({ s, p, f, now, width, height }) => {
           paddingRight: 8,
         }}
       >
+        {/* No month arrows: a widget cannot page, and arrows that only open
+            the app promise what they do not do. */}
         <FlexWidget style={{ flex: 1 }}>
           <Txt text={monthYear(f, now)} color={p.fg} size={16} weight="600" />
         </FlexWidget>
-        <NavButton p={p} iconName="chevronLeft" />
-        <Spacer size={4} horizontal />
-        <NavButton p={p} iconName="chevronRight" />
       </FlexWidget>
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent', height: MONTH_LABEL_HEIGHT, paddingHorizontal: MONTH_PAD }}>
         {weeks[0].map((cell) => (
