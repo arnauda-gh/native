@@ -26,6 +26,8 @@ AppRegistry.registerHeadlessTask('BulwarkDeviceSync', () => async (data: import(
 
 // Home-screen widgets (Android): every widget event runs this headless task.
 registerWidgetTaskHandler(widgetTaskHandler);
+// ...and leaving the app refreshes them in one (BulwarkWidgetRefreshService).
+AppRegistry.registerHeadlessTask('BulwarkWidgetRefresh', () => refreshWidgetsInBackground);
 
 // A headless push task evaluates this file too, so App is required when the
 // UI first renders instead of imported above: importing it here would load

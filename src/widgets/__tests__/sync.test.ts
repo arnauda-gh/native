@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const native = vi.hoisted(() => ({ BulwarkWidgets: undefined as undefined | { refreshInBackground: () => Promise<boolean> } }));
+vi.mock('react-native', () => ({ Platform: { OS: 'android' }, AppState: {}, NativeModules: native }));
+
 const refreshSnapshot = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('../build', () => ({ refreshSnapshot, readRegistry: vi.fn() }));
 vi.mock('../render', () => ({ hasPlacedWidgets: vi.fn(async () => true), redrawAll: vi.fn(async () => undefined) }));
@@ -21,6 +24,23 @@ describe('widget sync', () => {
     handleAppState('background');
     for (let i = 0; i < 10; i++) await Promise.resolve();
     expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('hands the refresh to a headless task where the app has one', async () => {
+    vi.useFakeTimers();
+    const refreshInBackground = vi.fn(async () => true);
+    native.BulwarkWidgets = { refreshInBackground };
+    handleAppState('background');
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(refreshInBackground).toHaveBeenCalledTimes(1);
+    expect(refreshSnapshot).not.toHaveBeenCalled();
+
+    // Android refused to start the service: refresh in place after all.
+    refreshInBackground.mockResolvedValueOnce(false);
+    handleAppState('background');
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(refreshSnapshot).toHaveBeenCalledTimes(1);
+    native.BulwarkWidgets = undefined;
   });
 
   it('leaves the app coming back to the scheduled refreshes', async () => {

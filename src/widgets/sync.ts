@@ -4,7 +4,7 @@
 // changed: mail or calendar data, the theme or clock settings, and when the
 // app goes to the background (the most likely moment to glance at a widget).
 
-import { AppState, Platform } from 'react-native';
+import { AppState, NativeModules, Platform } from 'react-native';
 import { readRegistry, refreshSnapshot } from './build';
 import { hasPlacedWidgets, redrawAll } from './render';
 import { emptySnapshot } from './snapshot';
@@ -21,7 +21,8 @@ async function run(): Promise<void> {
   lastRun = Date.now();
   try {
     if (!(await hasPlacedWidgets())) return;
-    await refreshSnapshot();
+    // Something changed since a refresh already running started; join the next one.
+    await refreshSnapshot({ after: 'change' });
     await redrawAll();
   } catch (err) {
     console.warn('[widgets] sync failed', err);
@@ -37,14 +38,22 @@ function schedule(delayMs: number, urgent = false): void {
 
 /**
  * Leaving the app is the most likely moment to glance at a widget, so the
- * widgets refresh right then. Not through a timer: React Native pauses JS
- * timers while the app is in the background, so even a zero-delay timer
- * would only fire when the app comes back.
+ * widgets refresh right then, in a headless task of their own
+ * (BulwarkWidgetRefreshService). React Native pauses JS timers while the app
+ * is in the background, and fetch hands every response over through a timer,
+ * so a refresh run by the backgrounded app itself stops at its first request;
+ * a running headless task keeps timers going.
  */
 export function handleAppState(next: string): void {
   if (next !== 'background') return;
   if (timer) clearTimeout(timer);
-  void run();
+  timer = null;
+  const native = NativeModules.BulwarkWidgets as { refreshInBackground?: () => Promise<boolean> } | undefined;
+  void (native?.refreshInBackground?.() ?? Promise.resolve(false))
+    .catch(() => false)
+    .then((started) => {
+      if (!started) void run();
+    });
 }
 
 /** Start following app state; returns the cleanup. No-op off Android. */
@@ -99,7 +108,8 @@ export async function refreshWidgetsInBackground(): Promise<void> {
   if (Platform.OS !== 'android') return;
   try {
     if (!(await hasPlacedWidgets(0))) return;
-    await refreshSnapshot();
+    // Something changed since a refresh already running started; join the next one.
+    await refreshSnapshot({ after: 'change' });
     await redrawAll();
   } catch (err) {
     console.warn('[widgets] background refresh failed', err);
