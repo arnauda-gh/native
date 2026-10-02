@@ -283,7 +283,7 @@ export function TaskRow({
 
 export const TASK_ROW_HEIGHT = 56;
 
-export const NOTICE_HEIGHT = 36;
+export const NOTICE_HEIGHT = 44;
 
 /**
  * A button's change that did not reach the server: says so in the
@@ -318,7 +318,8 @@ export function NoticeBar({ p, f, notice }: { p: WidgetPalette; f: Fmt; notice: 
       <Icon name="refresh" color={p.destructive as string} size={14} />
       <Spacer size={8} horizontal />
       <FlexWidget style={{ flex: 1 }}>
-        <Txt text={text} color={p.destructive} size={12} weight="500" />
+        {/* Two lines: a long task title must not cut off "Tap to try again". */}
+        <Txt text={text} color={p.destructive} size={12} weight="500" lines={2} />
       </FlexWidget>
     </FlexWidget>
   );
