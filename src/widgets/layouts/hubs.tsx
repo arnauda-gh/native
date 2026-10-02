@@ -92,7 +92,7 @@ function startLabel(f: Fmt, e: EventItem, now: number): string {
 const HUB_HEADER_HEIGHT = 44;
 /** SectionLabel: 11sp line plus 8 + 4 padding. */
 const SECTION_LABEL_HEIGHT = 28;
-const HUB_TASK_HEIGHT = 32;
+const HUB_TASK_HEIGHT = 48;
 
 /**
  * Tasks for the hub: open tasks that are overdue or due today (sorted like the
@@ -128,15 +128,13 @@ function HubTaskLine({ p, f, task, now }: { p: WidgetPalette; f: Fmt; task: Task
         alignItems: 'center',
         width: 'match_parent',
         height: HUB_TASK_HEIGHT,
-        paddingLeft: 8,
-        paddingRight: 14,
       }}
     >
-      {/* 32dp touch target around the 20dp box, which sits at the 14dp inset. */}
+      {/* 48dp touch target around the 20dp box, which sits at the 14dp inset. */}
       <FlexWidget
         {...action('toggleTask', { id: task.id })}
         accessibilityLabel={task.done ? f.t('widgets.tasks.mark_incomplete', 'Mark as not done') : f.t('widgets.tasks.mark_complete', 'Mark as done')}
-        style={{ width: 32, height: 32, justifyContent: 'center', alignItems: 'center' }}
+        style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }}
       >
         <FlexWidget
           style={{
@@ -153,12 +151,16 @@ function HubTaskLine({ p, f, task, now }: { p: WidgetPalette; f: Fmt; task: Task
           {task.done ? <Icon name="check" color="#ffffff" size={12} /> : null}
         </FlexWidget>
       </FlexWidget>
-      <Spacer size={6} horizontal />
-      <FlexWidget style={{ flex: 1 }}>
-        <Txt text={task.title || f.t('widgets.tasks.no_title', '(no title)')} color={task.done ? p.muted : p.fg} size={14} weight="500" />
+      <FlexWidget
+        {...open(links.calendar())}
+        style={{ flex: 1, height: 'match_parent', flexDirection: 'row', alignItems: 'center', paddingRight: 14 }}
+      >
+        <FlexWidget style={{ flex: 1 }}>
+          <Txt text={task.title || f.t('widgets.tasks.no_title', '(no title)')} color={task.done ? p.muted : p.fg} size={14} weight="500" />
+        </FlexWidget>
+        {dueLabel ? <Spacer size={8} horizontal /> : null}
+        {dueLabel ? <Txt text={dueLabel} color={dueColor} size={12} /> : null}
       </FlexWidget>
-      {dueLabel ? <Spacer size={8} horizontal /> : null}
-      {dueLabel ? <Txt text={dueLabel} color={dueColor} size={12} /> : null}
     </FlexWidget>
   );
 }

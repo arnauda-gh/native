@@ -229,30 +229,36 @@ export function TaskRow({
       style={{
         flexDirection: 'row',
         width: 'match_parent',
-        paddingHorizontal: 14,
-        paddingVertical: 8,
+        height: TASK_ROW_HEIGHT,
         borderBottomWidth: last ? 0 : 1,
         borderBottomColor: p.border,
       }}
     >
+      {/* The tick takes the row's full height and 50dp around the 22dp box. */}
       <FlexWidget
         {...toggle}
         accessibilityLabel={task.done ? f.t('widgets.tasks.mark_incomplete', 'Mark as not done') : f.t('widgets.tasks.mark_complete', 'Mark as done')}
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 11,
-          borderWidth: 2,
-          borderColor: task.done ? p.success : (`${p.muted}66` as `#${string}`),
-          backgroundColor: task.done ? p.success : p.bg,
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
+        style={{ width: 50, height: 'match_parent', justifyContent: 'center', alignItems: 'center' }}
       >
-        {task.done ? <Icon name="check" color="#ffffff" size={13} /> : null}
+        <FlexWidget
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+            borderWidth: 2,
+            borderColor: task.done ? p.success : (`${p.muted}66` as `#${string}`),
+            backgroundColor: task.done ? p.success : p.bg,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          {task.done ? <Icon name="check" color="#ffffff" size={13} /> : null}
+        </FlexWidget>
       </FlexWidget>
-      <Spacer size={12} horizontal />
-      <FlexWidget style={{ flex: 1 }}>
+      <FlexWidget
+        {...open(links.calendar())}
+        style={{ flex: 1, height: 'match_parent', justifyContent: 'center', paddingRight: 14 }}
+      >
         <TextWidget
           text={task.title || f.t('widgets.tasks.no_title', '(no title)')}
           maxLines={1}
@@ -273,4 +279,4 @@ export function TaskRow({
   );
 }
 
-export const TASK_ROW_HEIGHT = 55;
+export const TASK_ROW_HEIGHT = 56;
