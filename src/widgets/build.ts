@@ -1,10 +1,11 @@
 // Builds the widget snapshot. Mail comes from JMAP on a client of the widgets'
-// own (./jmap.ts) and works from a cold headless start. Calendar, tasks,
-// birthdays, files and scheduled sends reuse the app's helpers, which are
-// bound to the `jmapClient` singleton; they only run when that singleton is
-// already connected to the active account (the app's JS runtime is alive).
-// Otherwise those parts carry over from the previous snapshot, and the
-// time-dependent views are still recomputed when a widget draws.
+// own (./jmap.ts). Calendar, tasks, birthdays, files and scheduled sends reuse
+// the app's helpers, which are bound to the `jmapClient` singleton: they run
+// when that singleton is connected to the active account, either because the
+// app is running or because no UI has started in this runtime and the refresh
+// signed it in itself (see borrowSingleton). Otherwise (the app is up but
+// signed in elsewhere, or offline) those parts carry over from the previous
+// snapshot; the time-dependent views are still recomputed when a widget draws.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { jmapClient } from '../api/jmap-client';
@@ -23,6 +24,7 @@ import { startOfWeek } from './derive';
 import { fetchInboxPreview, fetchMailSection, openClient, type MailSection } from './jmap';
 import { normalizeHex } from './theme';
 import { storeRefresh } from './state';
+import { uiStarted } from './ui-presence';
 import {
   emptySnapshot,
   loadSnapshot,
@@ -269,12 +271,12 @@ async function buildBirthdays(now: number): Promise<Birthday[]> {
   return out.sort((a, b) => a.date - b.date).slice(0, 20);
 }
 
-async function buildTasks(previous: WidgetSnapshot, accountId: string): Promise<WidgetSnapshot['tasks']> {
+async function buildTasks(previous: WidgetSnapshot, accountId: string, reload: boolean): Promise<WidgetSnapshot['tasks']> {
   if (!useSettingsStore.getState().enableCalendarTasks) return { supported: false, items: [] };
   const { useCalendarStore } = require('../stores/calendar-store') as typeof import('../stores/calendar-store');
   try {
     const store = useCalendarStore.getState();
-    if (store.tasks.length === 0) await store.fetchTasks();
+    if (reload || store.tasks.length === 0) await store.fetchTasks();
     const { tasks, calendars } = useCalendarStore.getState();
     const byId = new Map(calendars.map((c) => [c.id, c]));
     const items: TaskItem[] = tasks
@@ -358,7 +360,11 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
   if (!keywordsState.hydrated) await keywordsState.hydrate();
   const { theme, timeFormat, calendarFirstDayOfWeek } = useSettingsStore.getState();
 
-  const live = singletonServes(activeAccountId);
+  // With no UI in this runtime (a widget or push task started it), sign the
+  // app's client in to the active account, so calendar and tasks load as
+  // they do in the app instead of staying as the app last left them.
+  const borrowed = !singletonServes(activeAccountId) && !uiStarted() && (await borrowSingleton(activeAccountId));
+  const live = borrowed || singletonServes(activeAccountId);
   const client = live ? jmapClient : await openClient(activeAccountId);
   const next: WidgetSnapshot = {
     ...previous,
@@ -433,7 +439,7 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
   if (live) {
     const [calendar, tasks, files, scheduled] = await Promise.all([
       buildCalendar(now, section.selfEmails, next, activeAccountId),
-      buildTasks(next, activeAccountId),
+      buildTasks(next, activeAccountId, borrowed),
       buildFiles(next),
       buildScheduled(next),
     ]);
@@ -444,6 +450,19 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
     next.appDataAt = now;
   }
   return next;
+}
+
+async function borrowSingleton(registryAccountId: string): Promise<boolean> {
+  try {
+    if (!(await jmapClient.loadAccount(registryAccountId))) return false;
+  } catch {
+    // Offline, or credentials the app will deal with when it opens.
+    return false;
+  }
+  const { useCalendarStore } = require('../stores/calendar-store') as typeof import('../stores/calendar-store');
+  const { useContactsStore } = require('../stores/contacts-store') as typeof import('../stores/contacts-store');
+  await Promise.all([useCalendarStore.getState().hydrate(), useContactsStore.getState().hydrate()]).catch(() => undefined);
+  return jmapClient.isConnected;
 }
 
 let inflight: Promise<WidgetSnapshot> | null = null;

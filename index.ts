@@ -6,6 +6,7 @@ import { registerWidgetTaskHandler } from 'react-native-android-widget';
 import { pushBackgroundTask } from './src/lib/push-background-task';
 import { widgetTaskHandler } from './src/widgets/task-handler';
 import { refreshWidgetsInBackground } from './src/widgets/sync';
+import { markUiStarted } from './src/widgets/ui-presence';
 
 // Runs in a fresh headless JS runtime when BulwarkPushTaskService is started
 // from BulwarkMessagingService on an FCM data message. Must be registered
@@ -30,6 +31,7 @@ registerWidgetTaskHandler(widgetTaskHandler);
 // UI first renders instead of imported above: importing it here would load
 // every screen, store and icon before the task could run.
 function Root() {
+  markUiStarted();
   const App = (require('./App') as typeof import('./App')).default;
   return createElement(App);
 }
