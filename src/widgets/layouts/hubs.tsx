@@ -8,7 +8,8 @@ import { action, links, open, type WidgetClick } from '../clicks';
 import { dueKind, nextEvent, sortTasks, tasksDueNow, upcomingTimed } from '../derive';
 import { addDays, sameDay, startOfDay, type Fmt } from '../format';
 import { ring, type IconName } from '../icons';
-import { AGENDA_ROW_HEIGHT, AgendaRow, MAIL_ROW_HEIGHT, MailRow } from '../parts';
+import { AGENDA_ROW_HEIGHT, AgendaRow, MAIL_ROW_HEIGHT, MailRow, NOTICE_HEIGHT, NoticeBar } from '../parts';
+import { noticeFor } from '../pending';
 import {
   Divider,
   EventChip,
@@ -173,7 +174,8 @@ export const TodayHubLayout: Layout = ({ s, p, f, now, height }) => {
 
   // Each section first gets its label and one row, in order; what is left
   // then goes to a second message and more tasks in turn.
-  let budget = height - 2 - HUB_HEADER_HEIGHT;
+  const notice = noticeFor(s.notice, 'toggleTask');
+  let budget = height - 2 - HUB_HEADER_HEIGHT - (notice ? NOTICE_HEIGHT + 12 : 0);
   const nextCost = SECTION_LABEL_HEIGHT + AGENDA_ROW_HEIGHT;
   const showNext = !!next && budget >= nextCost;
   if (showNext) budget -= nextCost;
@@ -242,6 +244,11 @@ export const TodayHubLayout: Layout = ({ s, p, f, now, height }) => {
         </FlexWidget>
         <Divider p={p} />
       </FlexWidget>
+      {notice ? (
+        <FlexWidget style={{ width: 'match_parent', paddingHorizontal: 8, paddingTop: 6, paddingBottom: 6 }}>
+          <NoticeBar p={p} f={f} notice={notice} />
+        </FlexWidget>
+      ) : null}
       {empty ? (
         <Placeholder p={p} iconName="check" title={f.t('widgets.hub.all_clear', "You're all caught up")} click={open(links.calendar())} />
       ) : null}

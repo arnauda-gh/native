@@ -9,7 +9,8 @@
 // covers (mail, or the calendar/tasks part that only some refreshes load).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { WidgetSnapshot } from './snapshot';
+import type { WidgetActionName } from './clicks';
+import type { ActionNotice, WidgetSnapshot } from './snapshot';
 
 export const PENDING_KEY = 'widgets:pending:v1';
 
@@ -31,12 +32,16 @@ export interface PendingOp {
 
 export interface PendingState {
   ops: PendingOp[];
+  /** The last button change that did not reach the server, until it is retried or goes stale. */
+  notice?: ActionNotice | null;
 }
 
 /** A done op the next refreshes never confirmed is dropped after this long. */
 export const DONE_TTL_MS = 30 * 60 * 1000;
 /** An op still in flight after this long belongs to a task that died. */
 export const IN_FLIGHT_TTL_MS = 2 * 60 * 1000;
+/** How long a failure notice stays on the widget. */
+export const NOTICE_TTL_MS = 10 * 60 * 1000;
 
 export function emptyPending(): PendingState {
   return { ops: [] };
@@ -46,7 +51,10 @@ export async function loadPending(): Promise<PendingState> {
   try {
     const raw = await AsyncStorage.getItem(PENDING_KEY);
     const parsed = raw ? (JSON.parse(raw) as Partial<PendingState>) : null;
-    return { ops: Array.isArray(parsed?.ops) ? parsed!.ops : [] };
+    return {
+      ops: Array.isArray(parsed?.ops) ? parsed!.ops : [],
+      notice: parsed?.notice && typeof parsed.notice === 'object' ? parsed.notice : null,
+    };
   } catch {
     return emptyPending();
   }
@@ -58,12 +66,17 @@ export async function savePending(state: PendingState): Promise<void> {
 
 const isMail = (c: PendingChange) => c.kind === 'removeMail' || c.kind === 'markRead';
 
-/** Drop what has expired: in-flight ops of a task that died, done ops no refresh confirmed. */
+/** Drop what has expired: in-flight ops of a task that died, done ops no refresh confirmed, an old notice. */
 export function expire(state: PendingState, now: number): PendingState {
   return {
-    ...state,
     ops: state.ops.filter((o) => (o.doneAt ? now - o.doneAt < DONE_TTL_MS : now - o.at < IN_FLIGHT_TTL_MS)),
+    notice: state.notice && now - state.notice.at < NOTICE_TTL_MS ? state.notice : null,
   };
+}
+
+/** Which widget buttons a notice belongs to. */
+export function noticeFor(notice: ActionNotice | null | undefined, ...actions: WidgetActionName[]): ActionNotice | null {
+  return notice && actions.includes(notice.action) ? notice : null;
 }
 
 /**

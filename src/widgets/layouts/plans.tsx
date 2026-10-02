@@ -20,7 +20,8 @@ import {
 } from '../derive';
 import { addDays, sameDay, startOfDay, type Fmt } from '../format';
 import { ring, type IconName } from '../icons';
-import { TASK_ROW_HEIGHT, TaskRow } from '../parts';
+import { NOTICE_HEIGHT, NoticeBar, TASK_ROW_HEIGHT, TaskRow } from '../parts';
+import { noticeFor } from '../pending';
 import {
   Avatar,
   Button,
@@ -107,6 +108,7 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
   const extra = inv.participants.length - names.length;
   const people = `${names.join(', ')}${extra > 0 ? ` +${extra}` : ''}`;
   const reply = (status: 'accepted' | 'tentative' | 'declined') => action('rsvp', { id: inv.id, status });
+  const notice = noticeFor(s.notice, 'rsvp');
 
   return (
     <Surface p={p} style={{ padding: pad }}>
@@ -140,11 +142,13 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
           </FlexWidget>
           <Txt text={untitled(f, inv.title)} color={p.fg} size={15} weight="600" />
           <MetaLine p={p} iconName="clock" text={eventWhen(f, inv)} />
-          {showPeople ? <MetaLine p={p} iconName="users" text={people} /> : null}
+          {showPeople && !notice ? <MetaLine p={p} iconName="users" text={people} /> : null}
         </FlexWidget>
       </FlexWidget>
       <Spacer size={8} />
       <Spacer />
+      {notice ? <NoticeBar p={p} f={f} notice={notice} /> : null}
+      {notice ? <Spacer size={6} /> : null}
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
         <Button
           p={p}
@@ -464,7 +468,9 @@ export const TasksLayout: Layout = ({ s, p, f, now, height }) => {
   // Open tasks first; sortTasks puts the completed ones last, so they only fill leftover rows.
   const sorted = sortTasks(s.tasks.items, now);
   const openCount = sorted.filter((t) => !t.done).length;
-  const fit = Math.max(1, Math.floor((height - 2 - headerHeight - 1) / TASK_ROW_HEIGHT));
+  const notice = noticeFor(s.notice, 'toggleTask');
+  const noticeSpace = notice ? NOTICE_HEIGHT + 12 : 0;
+  const fit = Math.max(1, Math.floor((height - 2 - headerHeight - 1 - noticeSpace) / TASK_ROW_HEIGHT));
   const rows = sorted.slice(0, fit);
   return (
     <Surface p={p}>
@@ -477,6 +483,11 @@ export const TasksLayout: Layout = ({ s, p, f, now, height }) => {
         click={open(links.calendar())}
         trailing={<Fab p={p} iconName="plus" size={compact ? 28 : 32} click={open(links.calendar())} />}
       />
+      {notice ? (
+        <FlexWidget style={{ width: 'match_parent', paddingHorizontal: 8, paddingTop: 6, paddingBottom: 6 }}>
+          <NoticeBar p={p} f={f} notice={notice} />
+        </FlexWidget>
+      ) : null}
       {openCount === 0 ? (
         <Placeholder p={p} iconName="check" title={f.t('widgets.tasks.empty', 'No open tasks')} click={open(links.calendar())} />
       ) : (

@@ -107,6 +107,25 @@ describe('widget archive', () => {
     expect(await shown()).toEqual(['m1', 'm2', 'm3']);
   });
 
+  it('says so on the widget, with the tap to repeat, and shows the message again', async () => {
+    const tap = handleWidgetAction('archive', { id: 'm2', accountId: 'acc' }, 7);
+    await until(() => calls.moves.length === 1);
+    calls.moves[0].resolve(false);
+    await tap;
+    const view = await currentView();
+    expect(view.notice).toMatchObject({ action: 'archive', label: 'm2', retry: { id: 'm2', accountId: 'acc' } });
+    expect(JSON.parse((await AsyncStorage.getItem('widgets:local:7'))!)).toEqual({ triageId: 'm2' });
+
+    // Tapping the notice repeats the archive and clears it.
+    const retry = handleWidgetAction(view.notice!.action, view.notice!.retry, 7);
+    await until(() => calls.moves.length === 2);
+    expect((await currentView()).notice).toBeNull();
+    calls.moves[1].resolve(true);
+    await retry;
+    expect(await shown()).toEqual(['m1', 'm3']);
+    expect((await currentView()).notice).toBeNull();
+  });
+
   it('does not lose either of two taps that land together', async () => {
     const taps = [
       handleWidgetAction('archive', { id: 'm1', accountId: 'acc' }, 7),

@@ -7,7 +7,7 @@ import { action, links, open, type WidgetClick } from './clicks';
 import { dueKind } from './derive';
 import type { Fmt } from './format';
 import { Avatar, ColorBar, Dot, FilledIcon, Icon, Spacer, Txt } from './primitives';
-import type { EventItem, MailItem, TaskItem } from './snapshot';
+import type { ActionNotice, EventItem, MailItem, TaskItem } from './snapshot';
 import type { WidgetPalette } from './theme';
 
 /** `bg-primary` pill with the message icon and the thread size, as in the list. */
@@ -280,3 +280,44 @@ export function TaskRow({
 }
 
 export const TASK_ROW_HEIGHT = 56;
+
+export const NOTICE_HEIGHT = 36;
+
+/**
+ * A button's change that did not reach the server: says so in the
+ * destructive tint (webmail `bg-destructive/10 text-destructive`) and repeats
+ * the tap when tapped.
+ */
+export function NoticeBar({ p, f, notice }: { p: WidgetPalette; f: Fmt; notice: ActionNotice }) {
+  const text = notice.action === 'archive'
+    ? f.t('widgets.notice.archive', "Couldn't archive. Tap to try again.")
+    : notice.action === 'trash'
+      ? f.t('widgets.notice.trash', "Couldn't delete. Tap to try again.")
+      : notice.action === 'markRead'
+        ? f.t('widgets.notice.mark_read', "Couldn't mark as read. Tap to try again.")
+        : notice.action === 'rsvp'
+          ? f.t('widgets.notice.rsvp', "Couldn't send your answer. Tap to try again.")
+          : f.t('widgets.notice.task', "Couldn't update “{title}”. Tap to try again.", {
+            title: notice.label || f.t('widgets.tasks.no_title', '(no title)'),
+          });
+  return (
+    <FlexWidget
+      {...action(notice.action, notice.retry)}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        width: 'match_parent',
+        height: NOTICE_HEIGHT,
+        paddingHorizontal: 10,
+        borderRadius: 6,
+        backgroundColor: p.destructiveBg,
+      }}
+    >
+      <Icon name="refresh" color={p.destructive as string} size={14} />
+      <Spacer size={8} horizontal />
+      <FlexWidget style={{ flex: 1 }}>
+        <Txt text={text} color={p.destructive} size={12} weight="500" />
+      </FlexWidget>
+    </FlexWidget>
+  );
+}

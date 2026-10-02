@@ -1292,6 +1292,13 @@
       "starred": "Starred",
       "unread": "unread"
     },
+    "notice": {
+      "archive": "Couldn't archive. Tap to try again.",
+      "mark_read": "Couldn't mark as read. Tap to try again.",
+      "rsvp": "Couldn't send your answer. Tap to try again.",
+      "task": "Couldn't update “{title}”. Tap to try again.",
+      "trash": "Couldn't delete. Tap to try again."
+    },
     "people": {
       "empty": "No favourites yet",
       "empty_body": "The people you hear from most show up here.",

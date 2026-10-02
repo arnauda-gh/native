@@ -160,6 +160,16 @@ export interface QuotaState {
   limit: number;
 }
 
+/** Told on the widget when a button's change did not reach the server. */
+export interface ActionNotice {
+  action: 'archive' | 'trash' | 'markRead' | 'rsvp' | 'toggleTask';
+  /** Subject, event or task title the change was about. */
+  label: string;
+  at: number;
+  /** The tap that failed, repeated when the notice is tapped. */
+  retry: Record<string, unknown>;
+}
+
 export interface WidgetSnapshot {
   version: 1;
   generatedAt: number;
@@ -207,6 +217,11 @@ export interface WidgetSnapshot {
   files: { supported: boolean; items: FileItem[] };
   vacation: VacationState | null;
   quota: QuotaState | null;
+  /**
+   * Only in what the widgets draw, never stored: the last button change the
+   * server did not take (./state.ts).
+   */
+  notice?: ActionNotice | null;
 }
 
 export function emptySnapshot(): WidgetSnapshot {

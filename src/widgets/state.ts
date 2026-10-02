@@ -11,12 +11,13 @@ import {
   savePending,
   type PendingChange,
 } from './pending';
-import { emptySnapshot, loadSnapshot, saveSnapshot, type WidgetSnapshot } from './snapshot';
+import { emptySnapshot, loadSnapshot, saveSnapshot, type ActionNotice, type WidgetSnapshot } from './snapshot';
 
 /** The view without queueing; only for code already running in the lane. */
 export async function readView(now = Date.now()): Promise<WidgetSnapshot> {
-  const [stored, pending] = await Promise.all([loadSnapshot(), loadPending()]);
-  return applyPending(stored ?? emptySnapshot(), expire(pending, now).ops);
+  const [stored, raw] = await Promise.all([loadSnapshot(), loadPending()]);
+  const pending = expire(raw, now);
+  return { ...applyPending(stored ?? emptySnapshot(), pending.ops), notice: pending.notice ?? null };
 }
 
 /** What the widgets draw: the stored snapshot with the buttons' changes laid over it. */
@@ -42,7 +43,7 @@ export function storeRefresh(next: WidgetSnapshot, startedAt: number): Promise<v
 export function replaceAll(next: WidgetSnapshot): Promise<void> {
   return serial(async () => {
     await saveSnapshot(next);
-    await savePending({ ops: [] });
+    await savePending({ ops: [], notice: null });
   });
 }
 
@@ -53,7 +54,8 @@ export function track(change: PendingChange, now = Date.now()): Promise<string> 
   const key = `${now}-${++counter}`;
   return serial(async () => {
     const pending = expire(await loadPending(), now);
-    await savePending({ ...pending, ops: [...pending.ops, { key, change, at: now }] });
+    // A new tap (a retry included) answers whatever the notice was about.
+    await savePending({ ops: [...pending.ops, { key, change, at: now }], notice: null });
     return key;
   });
 }
@@ -61,14 +63,15 @@ export function track(change: PendingChange, now = Date.now()): Promise<string> 
 /**
  * The server answered. A change it took stays laid over the data until a
  * refresh has caught up with it; one it refused (or that never reached it) is
- * dropped, which shows the data as the server last described it.
+ * dropped, which shows the data as the server last described it, and
+ * `notice` tells the user.
  */
-export function settle(key: string, ok: boolean, now = Date.now()): Promise<void> {
+export function settle(key: string, ok: boolean, notice?: ActionNotice, now = Date.now()): Promise<void> {
   return serial(async () => {
     const pending = expire(await loadPending(), now);
     const ops = ok
       ? pending.ops.map((o) => (o.key === key ? { ...o, doneAt: now } : o))
       : pending.ops.filter((o) => o.key !== key);
-    await savePending({ ...pending, ops });
+    await savePending({ ops, notice: !ok && notice ? notice : pending.notice ?? null });
   });
 }

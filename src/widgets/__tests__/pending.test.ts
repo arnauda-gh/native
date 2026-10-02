@@ -5,6 +5,7 @@ import {
   DONE_TTL_MS,
   expire,
   IN_FLIGHT_TTL_MS,
+  NOTICE_TTL_MS,
   type PendingOp,
 } from '../pending';
 import { PREVIEW_NOW, sampleSnapshot } from '../sample-snapshot';
@@ -77,12 +78,15 @@ describe('confirmedBy', () => {
 });
 
 describe('expire', () => {
-  it('drops stuck and stale ops', () => {
+  it('drops stuck and stale ops and an old notice', () => {
     const now = 10_000_000;
     const stuck = op({ kind: 'removeMail', id: 'a' }, { at: now - IN_FLIGHT_TTL_MS - 1 });
     const fresh = op({ kind: 'removeMail', id: 'b' }, { at: now - 1000 });
     const stale = op({ kind: 'task', id: 'c', done: true }, { at: 0, doneAt: now - DONE_TTL_MS - 1 });
     const recent = op({ kind: 'task', id: 'd', done: true }, { at: 0, doneAt: now - 1000 });
-    expect(expire({ ops: [stuck, fresh, stale, recent] }, now)).toEqual({ ops: [fresh, recent] });
+    const notice = (at: number) => ({ action: 'archive' as const, label: 'x', at, retry: {} });
+    expect(expire({ ops: [stuck, fresh, stale, recent], notice: notice(now - NOTICE_TTL_MS - 1) }, now))
+      .toEqual({ ops: [fresh, recent], notice: null });
+    expect(expire({ ops: [], notice: notice(now - 1000) }, now).notice).toEqual(notice(now - 1000));
   });
 });

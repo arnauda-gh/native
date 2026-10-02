@@ -4,7 +4,8 @@
 import React from 'react';
 import { FlexWidget, TextWidget } from 'react-native-android-widget';
 import { action, links, open } from '../clicks';
-import { MAIL_ROW_HEIGHT, MailRow } from '../parts';
+import { MAIL_ROW_HEIGHT, MailRow, NoticeBar } from '../parts';
+import { noticeFor } from '../pending';
 import {
   Avatar,
   Button,
@@ -91,6 +92,7 @@ export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
   }
   const position = candidates.indexOf(current) + 1;
   const target = { id: current.id, accountId: current.accountId, jmapAccountId: current.jmapAccountId, widgetId };
+  const notice = noticeFor(s.notice, 'archive', 'trash');
   return (
     <Surface p={p} style={{ padding: 12 }}>
       <FlexWidget {...open(links.message(current))} style={{ width: 'match_parent', flex: 1 }}>
@@ -109,8 +111,10 @@ export const TriageLayout: Layout = ({ s, p, f, now, widgetId, local }) => {
         </FlexWidget>
         <Spacer size={6} />
         <Txt text={current.subject || f.t('widgets.mail.no_subject', '(no subject)')} color={p.fg} size={14} weight="600" />
-        {current.preview ? <Txt text={current.preview} color={p.muted} size={13} lines={2} /> : null}
+        {/* The notice takes the preview's place, so the card fits at its smallest. */}
+        {current.preview && !notice ? <Txt text={current.preview} color={p.muted} size={13} lines={2} /> : null}
       </FlexWidget>
+      {notice ? <NoticeBar p={p} f={f} notice={notice} /> : null}
       <Spacer size={8} />
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
         <Button p={p} label={f.t('widgets.mail.archive', 'Archive')} iconName="archive" flex={1} click={action('archive', target)} />

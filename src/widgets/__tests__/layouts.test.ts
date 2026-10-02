@@ -118,6 +118,21 @@ describe('widget layouts', () => {
     }
   });
 
+  it('builds every action widget with a failure notice at every size', () => {
+    const notices = [
+      ['TriageWidget', 'archive'],
+      ['TriageWidget', 'trash'],
+      ['InvitationsWidget', 'rsvp'],
+      ['TasksWidget', 'toggleTask'],
+      ['TodayHubWidget', 'toggleTask'],
+    ] as const;
+    for (const [name, action] of notices) {
+      const w = catalog.widgets.find((x) => x.name === name)!;
+      const s = { ...sample, notice: { action, label: 'A task with a rather long title', at: PREVIEW_NOW, retry: { id: 'x' } } };
+      for (const [cols, rows] of sizes(w)) build(name, s, cols, rows);
+    }
+  });
+
   it('builds the triage card on a message that is gone', () => {
     build('TriageWidget', sample, 4, 2, { triageId: 'no-such-message' });
     build('TriageWidget', { ...sample, mail: { ...sample.mail, inbox: [] } }, 4, 2, { triageId: 'm1' });
