@@ -5,7 +5,7 @@
 
 import React from 'react';
 import { FlexWidget, OverlapWidget, SvgWidget } from 'react-native-android-widget';
-import { action, links, open } from '../clicks';
+import { links, open, rsvp } from '../clicks';
 import {
   busyBlocks,
   countdownTarget,
@@ -107,7 +107,7 @@ export const InvitationsLayout: Layout = ({ s, p, f, height }) => {
   const names = inv.participants.slice(0, 3).map((x) => x.name);
   const extra = inv.participants.length - names.length;
   const people = `${names.join(', ')}${extra > 0 ? ` +${extra}` : ''}`;
-  const reply = (status: 'accepted' | 'tentative' | 'declined') => action('rsvp', { id: inv.id, status });
+  const reply = (status: 'accepted' | 'tentative' | 'declined') => rsvp(inv, status);
   const notice = noticeFor(s.notice, 'rsvp');
 
   return (

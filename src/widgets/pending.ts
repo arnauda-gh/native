@@ -17,8 +17,11 @@ export const PENDING_KEY = 'widgets:pending:v1';
 export type PendingChange =
   | { kind: 'removeMail'; id: string }
   | { kind: 'markRead'; id: string }
-  | { kind: 'rsvp'; id: string; serverId: string; status: 'accepted' | 'tentative' | 'declined' }
-  | { kind: 'task'; id: string; done: boolean };
+  // `accountId`: the signed-in account the item belongs to. JMAP ids are
+  // only unique within an account, so the change must not touch another
+  // account's item with the same id once the widgets show that account.
+  | { kind: 'rsvp'; id: string; serverId: string; status: 'accepted' | 'tentative' | 'declined'; accountId?: string }
+  | { kind: 'task'; id: string; done: boolean; accountId?: string };
 
 export interface PendingOp {
   /** Unique per tap. */
@@ -130,6 +133,7 @@ export function applyPending(s: WidgetSnapshot, ops: PendingOp[]): WidgetSnapsho
         break;
       }
       case 'rsvp':
+        if (change.accountId && change.accountId !== s.activeAccountId) break;
         next.calendar.invitations = next.calendar.invitations.filter(
           (i) => i.id !== change.id && i.serverId !== change.serverId,
         );
@@ -137,6 +141,7 @@ export function applyPending(s: WidgetSnapshot, ops: PendingOp[]): WidgetSnapsho
           (e.serverId === change.serverId && e.myStatus ? { ...e, myStatus: change.status } : e));
         break;
       case 'task':
+        if (change.accountId && change.accountId !== s.activeAccountId) break;
         next.tasks.items = next.tasks.items.map((t) => (t.id === change.id ? { ...t, done: change.done } : t));
         break;
     }

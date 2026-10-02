@@ -4,7 +4,7 @@
 
 import React from 'react';
 import { FlexWidget, SvgWidget, TextWidget } from 'react-native-android-widget';
-import { action, links, open, type WidgetClick } from '../clicks';
+import { links, open, toggleTask, type WidgetClick } from '../clicks';
 import { dueKind, nextEvent, sortTasks, tasksDueNow, upcomingTimed } from '../derive';
 import { addDays, sameDay, startOfDay, type Fmt } from '../format';
 import { ring, type IconName } from '../icons';
@@ -133,7 +133,7 @@ function HubTaskLine({ p, f, task, now }: { p: WidgetPalette; f: Fmt; task: Task
     >
       {/* 48dp touch target around the 20dp box, which sits at the 14dp inset. */}
       <FlexWidget
-        {...action('toggleTask', { id: task.id })}
+        {...toggleTask(task)}
         accessibilityLabel={task.done ? f.t('widgets.tasks.mark_incomplete', 'Mark as not done') : f.t('widgets.tasks.mark_complete', 'Mark as done')}
         style={{ width: 48, height: 48, justifyContent: 'center', alignItems: 'center' }}
       >

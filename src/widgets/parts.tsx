@@ -3,7 +3,7 @@
 
 import React from 'react';
 import { FlexWidget, TextWidget } from 'react-native-android-widget';
-import { action, links, open, type WidgetClick } from './clicks';
+import { action, links, open, toggleTask, type WidgetClick } from './clicks';
 import { dueKind } from './derive';
 import type { Fmt } from './format';
 import { Avatar, ColorBar, Dot, FilledIcon, Icon, Spacer, Txt } from './primitives';
@@ -223,7 +223,7 @@ export function TaskRow({
         : kind === 'tomorrow'
           ? f.t('widgets.tasks.tomorrow', 'Tomorrow')
           : f.weekdayDayMonth(task.due);
-  const toggle: WidgetClick = action('toggleTask', { id: task.id });
+  const toggle: WidgetClick = toggleTask(task);
   return (
     <FlexWidget
       style={{

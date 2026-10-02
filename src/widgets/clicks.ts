@@ -3,7 +3,7 @@
 // names an action the widget task performs in the background (./actions.ts).
 
 import { APP_SCHEME } from '../navigation/linking';
-import type { EventItem, MailItem } from './snapshot';
+import type { EventItem, Invitation, MailItem, TaskItem } from './snapshot';
 
 export interface WidgetClick {
   clickAction?: string;
@@ -21,6 +21,36 @@ export type WidgetActionName =
 
 export function action(name: WidgetActionName, data: Record<string, unknown> = {}): WidgetClick {
   return { clickAction: name, clickActionData: data };
+}
+
+/**
+ * A task tick. It names the state the user asked for, not "the opposite of
+ * now": a second tap on a drawing that has not caught up yet would otherwise
+ * undo the first. It carries the task's account and server id so it acts on
+ * that task even when the widgets have moved on to another account.
+ */
+export function toggleTask(task: TaskItem): WidgetClick {
+  return action('toggleTask', {
+    id: task.id,
+    done: !task.done,
+    serverId: task.serverId,
+    title: task.title,
+    ...(task.accountId ? { accountId: task.accountId } : {}),
+    ...(task.jmapAccountId ? { jmapAccountId: task.jmapAccountId } : {}),
+  });
+}
+
+/** An RSVP; like {@link toggleTask} it carries everything the call needs. */
+export function rsvp(inv: Invitation, status: 'accepted' | 'tentative' | 'declined'): WidgetClick {
+  return action('rsvp', {
+    id: inv.id,
+    status,
+    serverId: inv.serverId,
+    participantId: inv.participantId,
+    title: inv.title,
+    ...(inv.accountId ? { accountId: inv.accountId } : {}),
+    ...(inv.jmapAccountId ? { jmapAccountId: inv.jmapAccountId } : {}),
+  });
 }
 
 export function open(uri: string): WidgetClick {

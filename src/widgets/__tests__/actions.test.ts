@@ -63,6 +63,7 @@ function snapshotOf(ids: string[]): WidgetSnapshot {
   };
 }
 
+const jmap = await import('../jmap');
 const { handleWidgetAction } = await import('../actions');
 const { currentView } = await import('../state');
 const { saveSnapshot } = await import('../snapshot');
@@ -78,6 +79,38 @@ beforeEach(async () => {
   calls.moves = [];
   server.inbox = ['m1', 'm2', 'm3'];
   await saveSnapshot(snapshotOf(server.inbox));
+});
+
+describe('widget task ticks and RSVPs', () => {
+  it('go to the account the tapped drawing showed, not the one the widgets show now', async () => {
+    // The widgets moved on to acc2, which has a task with the same JMAP id.
+    const s = snapshotOf([]);
+    s.activeAccountId = 'acc2';
+    s.tasks.items = [{
+      id: 'e', serverId: 'e', accountId: 'acc2', title: 'Theirs', dueHasTime: false, done: false, calendarName: '', color: '#123456',
+    }];
+    await saveSnapshot(s);
+    vi.mocked(jmap.openClient).mockClear();
+    vi.mocked(jmap.setTaskDone).mockClear();
+    await handleWidgetAction('toggleTask', { id: 'e', done: true, serverId: 'e', accountId: 'acc', title: 'Mine' }, 1);
+    expect(jmap.openClient).toHaveBeenCalledWith('acc');
+    expect(jmap.setTaskDone).toHaveBeenCalledWith(expect.anything(), 'e', true, undefined);
+  });
+
+  it('mark a task done on both of two quick taps rather than undoing the first', async () => {
+    vi.mocked(jmap.setTaskDone).mockClear();
+    const tap = { id: 't', done: true, serverId: 't', accountId: 'acc', title: 'Task' };
+    await Promise.all([handleWidgetAction('toggleTask', tap, 1), handleWidgetAction('toggleTask', tap, 1)]);
+    expect(vi.mocked(jmap.setTaskDone).mock.calls.map((c) => c[2])).toEqual([true, true]);
+  });
+
+  it('send an RSVP with the ids the tap carries', async () => {
+    vi.mocked(jmap.rsvp).mockClear();
+    await handleWidgetAction('rsvp', {
+      id: 'h1', status: 'accepted', serverId: 'j', participantId: 'a', accountId: 'acc', jmapAccountId: 'd', title: 'Budget',
+    }, 1);
+    expect(jmap.rsvp).toHaveBeenCalledWith(expect.anything(), 'j', 'a', 'accepted', 'd');
+  });
 });
 
 describe('widget archive', () => {

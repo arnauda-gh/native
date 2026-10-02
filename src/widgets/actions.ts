@@ -118,12 +118,22 @@ export async function handleWidgetAction(name: string, data: Data, widgetId: num
       const id = str(data.id);
       const status = data.status;
       if (!id || (status !== 'accepted' && status !== 'tentative' && status !== 'declined')) return;
-      const before = await currentView();
-      const invitation = before.calendar.invitations.find((i) => i.id === id);
-      if (!invitation) return;
-      await apply('rsvp', data, invitation.title, { kind: 'rsvp', id, serverId: invitation.serverId, status }, async () => {
-        const client = await clientFor(before.activeAccountId);
-        return !!client && rsvp(client, invitation.serverId, invitation.participantId, status, invitation.jmapAccountId);
+      // The tap carries the invitation (clicks.ts); a drawing made before it
+      // did is looked up in what the widgets show now.
+      const view = await currentView();
+      const shown = view.calendar.invitations.find((i) => i.id === id);
+      const accountId = str(data.accountId) ?? shown?.accountId ?? view.activeAccountId;
+      const serverId = str(data.serverId) ?? shown?.serverId;
+      const participantId = str(data.participantId) ?? shown?.participantId;
+      const jmapAccountId = str(data.jmapAccountId) ?? (str(data.serverId) ? undefined : shown?.jmapAccountId);
+      if (!serverId || !participantId) {
+        await redrawAll();
+        return;
+      }
+      const title = str(data.title) ?? shown?.title ?? '';
+      await apply('rsvp', data, title, { kind: 'rsvp', id, serverId, status, accountId: accountId ?? undefined }, async () => {
+        const client = await clientFor(accountId);
+        return !!client && rsvp(client, serverId, participantId, status, jmapAccountId);
       });
       return;
     }
@@ -131,13 +141,21 @@ export async function handleWidgetAction(name: string, data: Data, widgetId: num
     case 'toggleTask': {
       const id = str(data.id);
       if (!id) return;
-      const before = await currentView();
-      const task = before.tasks.items.find((t) => t.id === id);
-      if (!task) return;
-      const done = !task.done;
-      await apply('toggleTask', data, task.title, { kind: 'task', id, done }, async () => {
-        const client = await clientFor(before.activeAccountId);
-        if (!client || !(await setTaskDone(client, task.serverId, done, task.jmapAccountId))) return false;
+      const view = await currentView();
+      const shown = view.tasks.items.find((t) => t.id === id);
+      const accountId = str(data.accountId) ?? shown?.accountId ?? view.activeAccountId;
+      const serverId = str(data.serverId) ?? shown?.serverId;
+      const jmapAccountId = str(data.jmapAccountId) ?? (str(data.serverId) ? undefined : shown?.jmapAccountId);
+      // The state the user asked for; older drawings only named the task.
+      const done = typeof data.done === 'boolean' ? data.done : shown ? !shown.done : undefined;
+      if (!serverId || done === undefined) {
+        await redrawAll();
+        return;
+      }
+      const title = str(data.title) ?? shown?.title ?? '';
+      await apply('toggleTask', data, title, { kind: 'task', id, done, accountId: accountId ?? undefined }, async () => {
+        const client = await clientFor(accountId);
+        if (!client || !(await setTaskDone(client, serverId, done, jmapAccountId))) return false;
         // In the live app the snapshot's tasks come from the calendar store,
         // which did not see this change; reload it before the refresh that
         // follows reads it, or that refresh would undo the tick.

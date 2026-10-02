@@ -95,6 +95,8 @@ export interface EventItem {
   id: string;
   /** Server id of the stored event, for deep links. */
   serverId: string;
+  /** Signed-in account (app registry id) the event was loaded for. */
+  accountId?: string;
   jmapAccountId?: string;
   title: string;
   start: number;
@@ -129,6 +131,8 @@ export interface TaskItem {
   id: string;
   /** Raw JMAP id, for CalendarEvent/set. */
   serverId: string;
+  /** Signed-in account (app registry id) the task was loaded for. */
+  accountId?: string;
   jmapAccountId?: string;
   title: string;
   due?: number;

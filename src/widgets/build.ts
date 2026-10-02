@@ -120,6 +120,7 @@ function toEventItem(
   event: CalendarEvent,
   calendarsById: Map<string, { name: string; color?: string }>,
   selfEmails: string[],
+  accountId: string,
 ): EventItem {
   const calId = Object.keys(event.calendarIds ?? {}).find((id) => event.calendarIds[id]);
   const cal = calId ? calendarsById.get(calId) : undefined;
@@ -155,6 +156,7 @@ function toEventItem(
   return {
     id: event.id,
     serverId: event.originalId || event.id,
+    accountId,
     ...(event.accountId ? { jmapAccountId: event.accountId } : {}),
     title: event.title || '',
     start,
@@ -172,7 +174,12 @@ function toEventItem(
   };
 }
 
-async function buildCalendar(now: number, selfEmails: string[], previous: WidgetSnapshot): Promise<WidgetSnapshot['calendar']> {
+async function buildCalendar(
+  now: number,
+  selfEmails: string[],
+  previous: WidgetSnapshot,
+  accountId: string,
+): Promise<WidgetSnapshot['calendar']> {
   const calendarsSupported = jmapClient.hasAccountCapability(CAPABILITIES.CALENDARS);
   if (!calendarsSupported) return { supported: false, events: [], invitations: [], birthdays: await buildBirthdays(now) };
   const { useCalendarStore, loadEventsInRange } = require('../stores/calendar-store') as typeof import('../stores/calendar-store');
@@ -203,7 +210,7 @@ async function buildCalendar(now: number, selfEmails: string[], previous: Widget
   }
   const live = raw.filter((e) => e.status !== 'cancelled');
   const events = live
-    .map((e) => toEventItem(e, byId, selfEmails))
+    .map((e) => toEventItem(e, byId, selfEmails, accountId))
     .filter((e) => e.end >= rangeStart && e.start < rangeEnd)
     .sort((a, b) => a.start - b.start);
 
@@ -215,7 +222,7 @@ async function buildCalendar(now: number, selfEmails: string[], previous: Widget
     const participantId = getUserParticipantId(e, selfEmails);
     const key = e.originalId || e.id;
     if (!participantId || seen.has(key)) continue;
-    const item = toEventItem(e, byId, selfEmails);
+    const item = toEventItem(e, byId, selfEmails, accountId);
     if (item.end < now) continue;
     seen.add(key);
     invitations.push({ ...item, participantId });
@@ -262,7 +269,7 @@ async function buildBirthdays(now: number): Promise<Birthday[]> {
   return out.sort((a, b) => a.date - b.date).slice(0, 20);
 }
 
-async function buildTasks(previous: WidgetSnapshot): Promise<WidgetSnapshot['tasks']> {
+async function buildTasks(previous: WidgetSnapshot, accountId: string): Promise<WidgetSnapshot['tasks']> {
   if (!useSettingsStore.getState().enableCalendarTasks) return { supported: false, items: [] };
   const { useCalendarStore } = require('../stores/calendar-store') as typeof import('../stores/calendar-store');
   try {
@@ -280,6 +287,7 @@ async function buildTasks(previous: WidgetSnapshot): Promise<WidgetSnapshot['tas
         return {
           id: t.id,
           serverId: t.originalId || t.id,
+          accountId,
           ...(t.accountId ? { jmapAccountId: t.accountId } : {}),
           title: t.title || '',
           ...(Number.isFinite(due) ? { due } : {}),
@@ -424,8 +432,8 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
 
   if (live) {
     const [calendar, tasks, files, scheduled] = await Promise.all([
-      buildCalendar(now, section.selfEmails, next),
-      buildTasks(next),
+      buildCalendar(now, section.selfEmails, next, activeAccountId),
+      buildTasks(next, activeAccountId),
       buildFiles(next),
       buildScheduled(next),
     ]);

@@ -56,6 +56,17 @@ describe('applyPending', () => {
   });
 });
 
+describe('applyPending across accounts', () => {
+  it('leaves an item of another account with the same id alone', () => {
+    const s = sampleSnapshot(PREVIEW_NOW);
+    const task = s.tasks.items.find((t) => !t.done)!;
+    const shown = applyPending(s, [op({ kind: 'task', id: task.id, done: true, accountId: 'not-this-one' })]);
+    expect(shown.tasks.items.find((t) => t.id === task.id)!.done).toBe(false);
+    const own = applyPending(s, [op({ kind: 'task', id: task.id, done: true, accountId: s.activeAccountId! })]);
+    expect(own.tasks.items.find((t) => t.id === task.id)!.done).toBe(true);
+  });
+});
+
 describe('confirmedBy', () => {
   const mail = op({ kind: 'removeMail', id: 'm' }, { doneAt: 2000 });
   const task = op({ kind: 'task', id: 't', done: true }, { doneAt: 2000 });
