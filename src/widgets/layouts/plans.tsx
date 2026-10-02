@@ -34,6 +34,7 @@ import {
   Surface,
   Txt,
 } from '../primitives';
+import { avatarImageFor } from '../avatar-images';
 import type { EventItem, TaskItem } from '../snapshot';
 import { normalizeHex, type WidgetPalette } from '../theme';
 import type { Layout } from './types';
@@ -658,7 +659,7 @@ export const BirthdaysLayout: Layout = ({ s, p, f, now, width, height }) => {
               borderBottomColor: p.border,
             }}
           >
-            <Avatar initials={b.initials} color={b.color} size={32} />
+            <Avatar initials={b.initials} color={b.color} size={32} image={avatarImageFor(s.images, b.email)} />
             <Spacer size={10} horizontal />
             <FlexWidget style={{ flex: 1 }}>
               <Txt text={b.name || b.email || ''} color={p.fg} size={14} weight="600" />

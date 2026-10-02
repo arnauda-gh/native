@@ -3,11 +3,12 @@
 
 import React from 'react';
 import { FlexWidget, TextWidget } from 'react-native-android-widget';
+import { avatarImageFor } from './avatar-images';
 import { action, links, open, toggleTask, type WidgetClick } from './clicks';
 import { dueKind } from './derive';
 import type { Fmt } from './format';
 import { Avatar, ColorBar, Dot, FilledIcon, Icon, Spacer, Txt } from './primitives';
-import type { ActionNotice, EventItem, MailItem, TaskItem } from './snapshot';
+import type { ActionNotice, AvatarImages, EventItem, MailItem, TaskItem } from './snapshot';
 import type { WidgetPalette } from './theme';
 
 /** `bg-primary` pill with the message icon and the thread size, as in the list. */
@@ -44,6 +45,7 @@ export function MailRow({
   showAccountDot,
   accountColor,
   last,
+  images,
 }: {
   p: WidgetPalette;
   f: Fmt;
@@ -53,6 +55,8 @@ export function MailRow({
   showAccountDot?: boolean;
   accountColor?: string;
   last?: boolean;
+  /** The snapshot's avatar pictures; without them the avatar shows the initials. */
+  images?: AvatarImages;
 }) {
   const click = open(links.message(m));
   const senderColor = m.unread ? p.fg : p.muted;
@@ -98,7 +102,7 @@ export function MailRow({
       <FlexWidget style={{ width: 12, paddingTop: 5, alignItems: 'center' }}>
         {m.unread ? <Dot color={p.unreadDot} size={7} /> : null}
       </FlexWidget>
-      {!compact ? <Avatar initials={m.initials} color={m.color} size={32} /> : null}
+      {!compact ? <Avatar initials={m.initials} color={m.color} size={32} image={avatarImageFor(images, m.fromEmail)} /> : null}
       {!compact ? <Spacer size={10} horizontal /> : null}
       <FlexWidget style={{ flex: 1 }}>
         {header}

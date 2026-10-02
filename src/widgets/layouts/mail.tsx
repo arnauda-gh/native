@@ -19,6 +19,7 @@ import {
   Txt,
 } from '../primitives';
 import type { Fmt } from '../format';
+import { avatarImageFor } from '../avatar-images';
 import type { FolderCount } from '../snapshot';
 import type { IconName } from '../icons';
 import type { WidgetPalette } from '../theme';
@@ -70,7 +71,7 @@ export const InboxLayout: Layout = ({ s, p, f, now, width, height }) => {
         <Placeholder p={p} iconName="inbox" title={f.t('widgets.mail.empty_inbox', 'Your inbox is empty')} click={open(links.inbox())} />
       ) : (
         items.map((m, i) => (
-          <MailRow key={m.id} p={p} f={f} m={m} now={now} compact={compact} last={i === items.length - 1} />
+          <MailRow key={m.id} p={p} f={f} m={m} now={now} compact={compact} last={i === items.length - 1} images={s.images} />
         ))
       )}
     </Surface>
@@ -120,7 +121,7 @@ export const TriageLayout: Layout = ({ s, p, f, now, width, height, widgetId, lo
     <Surface p={p} style={{ padding: 12, paddingBottom: 4 }}>
       <FlexWidget {...open(links.message(current))} style={{ width: 'match_parent', flex: 1 }}>
         <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', width: 'match_parent' }}>
-          <Avatar initials={current.initials} color={current.color} size={32} />
+          <Avatar initials={current.initials} color={current.color} size={32} image={avatarImageFor(s.images, current.fromEmail)} />
           <Spacer size={10} horizontal />
           {/* A long name is cut, not the time and position after it. */}
           <FlexWidget style={{ flex: 1 }}>
@@ -186,7 +187,7 @@ export const UnreadCountLayout: Layout = ({ s, p, f, width }) => {
       <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
         {faces.map((m, i) => (
           <FlexWidget key={m.id} style={{ marginLeft: i === 0 ? 0 : -8 }}>
-            <Avatar initials={m.initials} color={m.color} size={24} ring={p.bg} />
+            <Avatar initials={m.initials} color={m.color} size={24} ring={p.bg} image={avatarImageFor(s.images, m.fromEmail)} />
           </FlexWidget>
         ))}
         {more > 0 ? <Spacer size={6} horizontal /> : null}
@@ -209,7 +210,7 @@ export const LatestMessageLayout: Layout = ({ s, p, f, now, height }) => {
   return (
     <Surface p={p} style={{ padding: 14, backgroundColor: p.unreadRow }} click={open(links.message(latest))}>
       <FlexWidget style={{ flexDirection: 'row', width: 'match_parent' }}>
-        <Avatar initials={latest.initials} color={latest.color} size={40} />
+        <Avatar initials={latest.initials} color={latest.color} size={40} image={avatarImageFor(s.images, latest.fromEmail)} />
         <Spacer />
         <Txt text={f.listDate(latest.receivedAt, now)} color={p.fg} size={12} weight="600" />
       </FlexWidget>

@@ -164,6 +164,12 @@ export interface QuotaState {
   limit: number;
 }
 
+/** Avatar pictures (./avatar-images.ts): contact photos by address, sender logos by domain, as data URIs. */
+export interface AvatarImages {
+  photos: Record<string, string>;
+  favicons: Record<string, string>;
+}
+
 /** Told on the widget when a button's change did not reach the server. */
 export interface ActionNotice {
   action: 'archive' | 'trash' | 'markRead' | 'rsvp' | 'toggleTask';
@@ -221,6 +227,8 @@ export interface WidgetSnapshot {
   files: { supported: boolean; items: FileItem[] };
   vacation: VacationState | null;
   quota: QuotaState | null;
+  /** Absent in snapshots stored before avatars had pictures. */
+  images?: AvatarImages;
   /**
    * Only in what the widgets draw, never stored: the last button change the
    * server did not take (./state.ts).

@@ -25,7 +25,8 @@ import { addDays, sameDay, startOfDay, type Fmt } from '../format';
 import { ring, type IconName } from '../icons';
 import { AGENDA_ROW_HEIGHT, AgendaRow, DAY_BAND_HEIGHT, DayBand } from '../parts';
 import { Avatar, Button, Dot, EventChip, Fab, Header, Icon, Placeholder, Spacer, Surface, Txt } from '../primitives';
-import type { EventItem, WidgetSnapshot } from '../snapshot';
+import { avatarImageFor } from '../avatar-images';
+import type { AvatarImages, EventItem, WidgetSnapshot } from '../snapshot';
 import { chipBackground, normalizeHex, type WidgetPalette } from '../theme';
 import type { Layout } from './types';
 
@@ -956,13 +957,13 @@ function countdown(f: Fmt, e: EventItem, now: number, running: boolean): Countdo
   };
 }
 
-function People({ p, e }: { p: WidgetPalette; e: EventItem }) {
+function People({ p, e, images }: { p: WidgetPalette; e: EventItem; images?: AvatarImages }) {
   const faces = e.participants.slice(0, 3);
   return (
     <FlexWidget style={{ flexDirection: 'row', alignItems: 'center' }}>
       {faces.map((person, i) => (
         <FlexWidget key={`${person.email}-${i}`} style={{ marginLeft: i === 0 ? 0 : -7 }}>
-          <Avatar initials={person.initials} color={person.color} size={22} ring={p.bg} />
+          <Avatar initials={person.initials} color={person.color} size={22} ring={p.bg} image={avatarImageFor(images, person.email)} />
         </FlexWidget>
       ))}
       <Spacer size={6} horizontal />
@@ -1023,7 +1024,7 @@ export const UpNextLayout: Layout = ({ s, p, f, now }) => {
             <Txt text={meta} color={p.muted} size={13} />
           </FlexWidget>
           {e.participants.length > 0 ? <Spacer size={6} /> : null}
-          {e.participants.length > 0 ? <People p={p} e={e} /> : null}
+          {e.participants.length > 0 ? <People p={p} e={e} images={s.images} /> : null}
         </FlexWidget>
       </FlexWidget>
       <Spacer />

@@ -41,8 +41,25 @@ vi.mock('react-native-android-widget', async () => {
     if (typeof props.svg !== 'string') throw new Error('widgets draw inline SVG strings only');
     return { ...convertCommonStyle(props.style ?? {}), ...convertClickAction(props), svgString: props.svg };
   };
+  // The compiled ImageWidget requires react-native too; the widgets only draw data URIs.
+  function ImageWidget() {
+    return null;
+  }
+  ImageWidget.__name__ = 'ImageWidget';
+  ImageWidget.convertProps = (props: { style?: object; image: unknown; imageWidth: number; imageHeight: number; radius?: number }) => {
+    if (typeof props.image !== 'string' || !props.image.startsWith('data:image')) throw new Error('widgets draw data-URI images only');
+    return {
+      ...convertCommonStyle(props.style ?? {}),
+      ...convertClickAction(props),
+      imageWidth: props.imageWidth,
+      imageHeight: props.imageHeight,
+      image: { uri: props.image },
+      ...(props.radius ? { radius: props.radius } : {}),
+    };
+  };
   return {
     ...checked(await import('react-native-android-widget/lib/commonjs/widgets/FlexWidget' as string)),
+    ...checked({ ImageWidget }),
     ...checked(await import('react-native-android-widget/lib/commonjs/widgets/ListWidget' as string)),
     ...checked(await import('react-native-android-widget/lib/commonjs/widgets/OverlapWidget' as string)),
     ...checked(await import('react-native-android-widget/lib/commonjs/widgets/TextWidget' as string)),
@@ -131,6 +148,15 @@ describe('widget layouts', () => {
       const s = { ...sample, notice: { action, label: 'A task with a rather long title', at: PREVIEW_NOW, retry: { id: 'x' } } };
       for (const [cols, rows] of sizes(w)) build(name, s, cols, rows);
     }
+  });
+
+  it('builds avatars with contact photos and sender logos', () => {
+    const png = 'data:image/png;base64,iVBORw0KGgo=';
+    const images = {
+      photos: Object.fromEntries(sample.mail.inbox.slice(0, 2).map((m) => [m.fromEmail.toLowerCase(), png])),
+      favicons: Object.fromEntries(sample.mail.inbox.map((m) => [m.fromEmail.split('@')[1], png])),
+    };
+    for (const w of catalog.widgets) build(w.name, { ...sample, images }, w.cols, w.rows);
   });
 
   it('builds the triage card on a message that is gone', () => {

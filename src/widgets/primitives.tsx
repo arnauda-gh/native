@@ -6,6 +6,7 @@
 import React from 'react';
 import {
   FlexWidget,
+  ImageWidget,
   OverlapWidget,
   SvgWidget,
   TextWidget,
@@ -114,20 +115,27 @@ export function Divider({ p }: { p: WidgetPalette }) {
   return <FlexWidget style={{ height: 1, width: 'match_parent', backgroundColor: p.border }} />;
 }
 
-/** Initials on the hashed avatar colour, as the webmail draws a sender without a photo. */
+/**
+ * The webmail's sender avatar: the contact photo or the sender's logo (on
+ * white) when the snapshot has one (./avatar-images.ts), else the initials on
+ * the hashed avatar colour. The initials are drawn underneath, so a picture
+ * that does not draw still leaves them.
+ */
 export function Avatar({
   initials,
   color,
   size = 32,
   ring,
+  image,
 }: {
   initials: string;
   color: string;
   size?: number;
   /** Draws a ring in this colour, for stacked avatars. */
   ring?: ColorProp;
+  image?: { src: string; logo: boolean } | null;
 }) {
-  return (
+  const face = (
     <FlexWidget
       style={{
         width: size,
@@ -145,6 +153,34 @@ export function Avatar({
         style={{ color: '#ffffff', fontSize: Math.round(size * 0.38), fontWeight: '500' }}
       />
     </FlexWidget>
+  );
+  if (!image) return face;
+  // Inside the ring, when there is one.
+  const inner = ring ? size - 4 : size;
+  return (
+    <OverlapWidget style={{ width: size, height: size }}>
+      {face}
+      <FlexWidget
+        style={{
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          justifyContent: 'center',
+          alignItems: 'center',
+          ...(ring ? { backgroundColor: ring } : {}),
+        }}
+      >
+        <FlexWidget style={{ width: inner, height: inner, borderRadius: inner / 2, backgroundColor: image.logo ? '#ffffff' : normalizeHex(color) }}>
+          <ImageWidget
+            image={image.src as `data:image${string}`}
+            imageWidth={inner}
+            imageHeight={inner}
+            radius={inner / 2}
+            resizeMode="cover"
+          />
+        </FlexWidget>
+      </FlexWidget>
+    </OverlapWidget>
   );
 }
 

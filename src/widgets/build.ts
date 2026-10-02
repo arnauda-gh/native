@@ -23,6 +23,7 @@ import { addDays, startOfDay } from './format';
 import { startOfWeek } from './derive';
 import { fetchInboxPreview, fetchMailSection, openClient, type MailSection } from './jmap';
 import { normalizeHex } from './theme';
+import { resolveAvatarImages } from './avatar-images';
 import { storeRefresh } from './state';
 import { uiStarted } from './ui-presence';
 import {
@@ -386,6 +387,7 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
     next.files = blank.files;
     next.vacation = null;
     next.quota = null;
+    next.images = undefined;
     next.appDataAt = 0;
   }
   if (!client) return next;
@@ -449,7 +451,29 @@ async function buildSnapshot(previous: WidgetSnapshot): Promise<WidgetSnapshot> 
     next.mail.scheduled = scheduled;
     next.appDataAt = now;
   }
+  next.images = await avatarImages(next, useSettingsStore.getState().senderFavicons);
   return next;
+}
+
+/** Pictures for every avatar the widgets can show (see ./avatar-images.ts). */
+async function avatarImages(s: WidgetSnapshot, favicons: boolean): Promise<WidgetSnapshot['images']> {
+  const emails = [
+    ...s.mail.inbox.map((m) => m.fromEmail),
+    ...s.mail.unified.map((m) => m.fromEmail),
+    ...s.mail.starred.map((m) => m.fromEmail),
+    ...s.mail.favourites.map((p) => p.email),
+    ...s.calendar.events.flatMap((e) => e.participants.map((x) => x.email)),
+    ...s.calendar.birthdays.map((b) => b.email ?? ''),
+  ].filter(Boolean);
+  try {
+    const { useContactsStore } = require('../stores/contacts-store') as typeof import('../stores/contacts-store');
+    const contacts = useContactsStore.getState();
+    if (!contacts.hydrated) await contacts.hydrate();
+    return await resolveAvatarImages(emails, { contacts: useContactsStore.getState().contacts ?? [], favicons });
+  } catch (err) {
+    console.warn('[widgets] avatar pictures failed', err);
+    return s.images;
+  }
 }
 
 async function borrowSingleton(registryAccountId: string): Promise<boolean> {

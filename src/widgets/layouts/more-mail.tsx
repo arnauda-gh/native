@@ -23,7 +23,8 @@ import {
   Surface,
   Txt,
 } from '../primitives';
-import type { AccountSummary, Person, ScheduledItem } from '../snapshot';
+import { avatarImageFor } from '../avatar-images';
+import type { AccountSummary, AvatarImages, Person, ScheduledItem } from '../snapshot';
 import { normalizeHex, type WidgetPalette } from '../theme';
 import type { Layout } from './types';
 
@@ -191,6 +192,7 @@ export const AllAccountsLayout: Layout = ({ s, p, f, now, width, height }) => {
             showAccountDot
             accountColor={colors.get(m.accountId)}
             last={i === items.length - 1}
+            images={s.images}
           />
         ))
       )}
@@ -237,6 +239,7 @@ export const StarredLayout: Layout = ({ s, p, f, now, height }) => {
             now={now}
             compact={compact}
             last={i === items.length - 1}
+            images={s.images}
           />
         ))
       )}
@@ -285,6 +288,7 @@ function PersonTile({
   avatar,
   showTime,
   now,
+  images,
 }: {
   p: WidgetPalette;
   f: Fmt;
@@ -292,6 +296,7 @@ function PersonTile({
   avatar: number;
   showTime: boolean;
   now: number;
+  images?: AvatarImages;
 }) {
   // The badge sits 3dp above and 5dp right of the avatar, as in the list's
   // avatar badges; the box leaves 5dp on both sides so the avatar stays centred.
@@ -303,7 +308,7 @@ function PersonTile({
     >
       <Overlay style={{ width: avatar + 10, height: avatar + 3 }}>
         <FlexWidget style={{ marginLeft: 5, marginTop: 3 }}>
-          <Avatar initials={person.initials} color={person.color} size={avatar} />
+          <Avatar initials={person.initials} color={person.color} size={avatar} image={avatarImageFor(images, person.email)} />
         </FlexWidget>
         {unread ? <UnreadBadge p={p} count={person.unread} left={avatar + 10} /> : null}
       </Overlay>
@@ -373,6 +378,7 @@ export const FavouritePeopleLayout: Layout = ({ s, p, f, now, width, height }) =
           avatar={avatar}
           showTime={showTime}
           now={now}
+          images={s.images}
         />
       ) : (
         <FlexWidget key={`person-${i}`} style={{ flex: 1, width: 0 }} />
