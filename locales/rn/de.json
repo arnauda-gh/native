@@ -1169,5 +1169,196 @@
     "severity_deprecated": "Erforderlich",
     "severity_security": "Sicherheit",
     "title": "App-Updates"
+  },
+  "widgets": {
+    "attachments": {
+      "empty": "Keine neuen Anhänge",
+      "from_mail": "aus E-Mail",
+      "title": "Anhänge",
+      "unknown_sender": "Unbekannter Absender"
+    },
+    "birthdays": {
+      "empty": "Keine Geburtstage in Sicht",
+      "empty_body": "Geburtstage kommen aus Ihren Kontakten.",
+      "in_days": "{count, plural, one {in # Tag} other {in # Tagen}}",
+      "send_wishes": "Gratulieren",
+      "title": "Geburtstage",
+      "wishes_subject": "Alles Gute zum Geburtstag!"
+    },
+    "calendar": {
+      "agenda": "Agenda",
+      "agenda_more": "{day}: {events}",
+      "all_day": "Ganztägig",
+      "join": "Teilnehmen",
+      "join_named": "{name} beitreten",
+      "more_this_week": "{count, plural, one {# weiterer diese Woche} other {# weitere diese Woche}}",
+      "no_more_today": "Heute keine Termine mehr",
+      "nothing_planned": "Nichts im Kalender",
+      "now": "Jetzt",
+      "open": "Öffnen",
+      "running_late": "Verspäte mich",
+      "running_late_body": "Ich komme ein paar Minuten später zu {title}.",
+      "running_late_subject": "Verspäte mich: {title}",
+      "today": "Heute",
+      "tomorrow": "Morgen",
+      "unit_days": "{count, plural, one {Tag} other {Tage}}",
+      "unit_hours": "{count, plural, one {Std.} other {Std.}}",
+      "unit_minutes": "{count, plural, one {Min.} other {Min.}}",
+      "unsupported": "Kalender ist auf diesem Server nicht verfügbar",
+      "untitled": "(ohne Titel)",
+      "video_call": "Videoanruf"
+    },
+    "countdown": {
+      "days": "{count, plural, one {Tag} other {Tage}}",
+      "empty": "Keine anstehenden Termine"
+    },
+    "draft": {
+      "edited_at": "Bearbeitet {when}",
+      "edited_minutes": "{count, plural, one {Vor # Min. bearbeitet} other {Vor # Min. bearbeitet}}",
+      "edited_now": "Gerade bearbeitet",
+      "empty": "Keine Entwürfe",
+      "empty_body": "Nachrichten, die Sie beginnen und nicht senden, warten hier.",
+      "keep_writing": "Weiterschreiben",
+      "title": "Entwürfe"
+    },
+    "files": {
+      "empty": "Noch keine Dateien",
+      "recent": "Zuletzt geändert",
+      "unsupported": "Dateien sind auf diesem Server nicht verfügbar"
+    },
+    "free": {
+      "busy_until": "Belegt bis {time}",
+      "free_rest": "Den Rest des Tages frei",
+      "free_until": "Frei bis {time}",
+      "mail": "Freie Zeiten mailen",
+      "mail_subject": "Meine freien Zeiten diese Woche",
+      "no_calendar": "Kein Kalender in diesem Konto",
+      "then": "danach {title}",
+      "then_free": "danach frei"
+    },
+    "hub": {
+      "all_clear": "Alles erledigt",
+      "mail_unread": "E-Mail · {count} ungelesen",
+      "next": "Als Nächstes",
+      "next_on": "Als Nächstes · {day}",
+      "no_events": "Keine anstehenden Termine",
+      "now": "Jetzt",
+      "tasks_due": "Aufgaben · {count} fällig"
+    },
+    "invites": {
+      "accept": "Zusagen",
+      "decline": "Absagen",
+      "empty": "Keine offenen Einladungen",
+      "label": "Einladung · {name}",
+      "label_plain": "Einladung",
+      "maybe": "Vielleicht",
+      "position": "{index} von {count}"
+    },
+    "mail": {
+      "all_accounts": "Alle Konten",
+      "all_caught_up": "Alles gelesen",
+      "archive": "Archivieren",
+      "delete": "Löschen",
+      "empty_all_accounts": "Ihre Posteingänge sind leer",
+      "empty_inbox": "Ihr Posteingang ist leer",
+      "folders": "Ordner",
+      "in_outbox": "{count, plural, one {# Änderung wartet} other {# Änderungen warten}}",
+      "in_outbox_short": "{count} warten",
+      "inbox": "Posteingang",
+      "more_unread": "+{count} weitere ungelesen",
+      "no_folders": "Keine Ordner",
+      "no_starred": "Keine markierten E-Mails",
+      "no_starred_body": "Markieren Sie eine Nachricht mit einem Stern, um sie hier zu behalten.",
+      "no_subject": "(kein Betreff)",
+      "no_unread": "Keine ungelesenen Nachrichten im Posteingang.",
+      "position": "{index} von {count}",
+      "reply": "Antworten",
+      "scheduled": "Geplant",
+      "starred": "Markiert",
+      "unread": "ungelesen"
+    },
+    "notice": {
+      "archive": "Archivieren fehlgeschlagen. Tippen zum Wiederholen.",
+      "mark_read": "Als gelesen markieren fehlgeschlagen. Tippen zum Wiederholen.",
+      "rsvp": "Antwort nicht gesendet. Tippen zum Wiederholen.",
+      "task": "„{title}“ nicht aktualisiert. Tippen zum Wiederholen.",
+      "trash": "Löschen fehlgeschlagen. Tippen zum Wiederholen."
+    },
+    "people": {
+      "empty": "Noch keine Favoriten",
+      "empty_body": "Die Personen, von denen Sie am meisten hören, erscheinen hier.",
+      "favourites": "Favoriten"
+    },
+    "relative": {
+      "days": "{count, plural, one {in # Tag} other {in # Tagen}}",
+      "hours": "in {count} Std.",
+      "minutes": "in {count} Min.",
+      "now": "jetzt"
+    },
+    "scheduled": {
+      "day_at": "{day}, {time}",
+      "empty": "Nichts geplant",
+      "empty_body": "Nachrichten, die Sie später senden lassen, erscheinen hier.",
+      "no_recipient": "(kein Empfänger)",
+      "sending": "Wird gesendet",
+      "to": "An: {name}",
+      "today_at": "Heute, {time}",
+      "tomorrow_at": "Morgen, {time}",
+      "waiting": "Wartet auf Netz",
+      "waiting_body": "Offline vorgenommene Änderungen werden gesendet, sobald Sie wieder online sind."
+    },
+    "search": {
+      "no_recent": "Ihre letzten Suchen erscheinen hier.",
+      "placeholder": "E-Mails durchsuchen…",
+      "recent": "Letzte Suchen"
+    },
+    "shortcuts": {
+      "calendar": "Kalender",
+      "compose": "Verfassen",
+      "contacts": "Kontakte",
+      "files": "Dateien"
+    },
+    "state": {
+      "error": "Widget kann nicht angezeigt werden",
+      "loading": "Wird geladen…",
+      "open_app": "Öffnen Sie die App einmal, falls dies leer bleibt.",
+      "open_to_load": "Öffnen Sie Bulwark, um dies zu laden",
+      "signed_out": "Bei Bulwark anmelden"
+    },
+    "storage": {
+      "no_limit": "Kein Speicherlimit",
+      "title": "Speicher",
+      "unavailable": "Keine Angaben zum Speicher",
+      "used_of": "{used} von {total}"
+    },
+    "tag": {
+      "empty": "Noch keine Tags",
+      "empty_body": "Tags, die Sie in der App vergeben, erscheinen hier.",
+      "messages": "{count, plural, one {Nachricht} other {Nachrichten}}",
+      "total": "{count, plural, one {# Nachricht} other {# Nachrichten}}"
+    },
+    "tasks": {
+      "all_done": "Alles erledigt",
+      "empty": "Keine offenen Aufgaben",
+      "mark_complete": "Als erledigt markieren",
+      "mark_incomplete": "Als nicht erledigt markieren",
+      "no_title": "(ohne Titel)",
+      "off": "Aufgaben sind aus",
+      "off_body": "Schalten Sie Aufgaben in den Kalendereinstellungen der App ein",
+      "open_count": "{count} offen",
+      "overdue": "Überfällig",
+      "still_open": "{count} noch offen",
+      "title": "Aufgaben",
+      "today": "Heute",
+      "tomorrow": "Morgen"
+    },
+    "vacation": {
+      "active": "Aktiv",
+      "inactive": "Inaktiv",
+      "subject": "Betreff: {subject}",
+      "title": "Abwesenheitsnotiz",
+      "unsupported": "Abwesenheitsnotizen sind nicht verfügbar",
+      "until": "Bis {date}"
+    }
   }
 }
