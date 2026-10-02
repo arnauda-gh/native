@@ -35,6 +35,18 @@ function schedule(delayMs: number, urgent = false): void {
   timer = setTimeout(() => { void run(); }, wait);
 }
 
+/**
+ * Leaving the app is the most likely moment to glance at a widget, so the
+ * widgets refresh right then. Not through a timer: React Native pauses JS
+ * timers while the app is in the background, so even a zero-delay timer
+ * would only fire when the app comes back.
+ */
+export function handleAppState(next: string): void {
+  if (next !== 'background') return;
+  if (timer) clearTimeout(timer);
+  void run();
+}
+
 /** Start following app state; returns the cleanup. No-op off Android. */
 export function startWidgetSync(): () => void {
   if (Platform.OS !== 'android') return () => {};
@@ -61,9 +73,7 @@ export function startWidgetSync(): () => void {
       }
     }),
   ];
-  const appState = AppState.addEventListener('change', (next) => {
-    if (next === 'background') schedule(0, true);
-  });
+  const appState = AppState.addEventListener('change', handleAppState);
   return () => {
     for (const unsubscribe of unsubscribers) unsubscribe();
     appState.remove();
