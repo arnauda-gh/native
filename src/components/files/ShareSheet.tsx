@@ -98,6 +98,9 @@ export default function ShareSheet({ node, onClose, onChanged }: ShareSheetProps
   );
 
   const candidates = useMemo(() => {
+    // The sheet is mounted with the Files tab, before a session may exist
+    // (an offline cold start): nobody to list yet, and no own id to read.
+    if (principals.length === 0) return [];
     const self = ownPrincipalId();
     const q = search.trim().toLowerCase();
     return principals
