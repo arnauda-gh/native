@@ -19,7 +19,7 @@ import { filledIcon, icon, type FilledIconName, type IconName } from './icons';
 import type { WidgetClick } from './clicks';
 
 /** Corner radius of the widget surface; `widget_radius` in android/app/src/main/res/values/dimens.xml. */
-export const WIDGET_RADIUS = 22;
+export const WIDGET_RADIUS = 16;
 
 /**
  * The widget's background. Its edge and the clip to rounded corners come from
