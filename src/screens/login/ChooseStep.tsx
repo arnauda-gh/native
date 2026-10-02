@@ -4,6 +4,7 @@ import { ClipboardPaste, QrCode, Mail, Plus, Server } from 'lucide-react-native'
 import { spacing, radius, typography, type ThemePalette } from '../../theme/tokens';
 import { useColors, useResolvedTheme } from '../../theme/colors';
 import type { AccountEntry } from '../../stores/account-store';
+import { getAccountInitials } from '../../lib/avatar-utils';
 import OptionTile from './OptionTile';
 import LoginNotice from './LoginNotice';
 import { useLocaleStore } from '../../stores/locale-store';
@@ -33,10 +34,7 @@ function hostOf(url: string): string {
 }
 
 function initialsOf(account: AccountEntry): string {
-  const source = account.displayName || account.email || account.username;
-  const parts = source.replace(/@.*$/, '').split(/[.\s_-]+/).filter(Boolean);
-  const letters = parts.slice(0, 2).map((part) => part[0]);
-  return (letters.join('') || source[0] || '?').toUpperCase();
+  return getAccountInitials(account.displayName ?? '', account.email || account.username);
 }
 
 /**
