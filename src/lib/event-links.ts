@@ -10,6 +10,8 @@
  * A physical address is handed to the platform's maps app instead.
  */
 
+import { isSafeExternalUrl } from './open-url';
+
 /** The place fields read here, loose enough for any event shape. */
 export interface EventPlaces {
   locations?: Record<string, { name?: string | null; description?: string | null } | null> | null;
@@ -37,8 +39,6 @@ const PROVIDERS: Array<{ name: string; host: RegExp; path?: RegExp }> = [
   { name: 'GoTo', host: /^(meet\.goto\.com|global\.gotomeeting\.com|app\.gotomeeting\.com)$/, path: /^\/./ },
   { name: 'Visio', host: /^(visio|webconf)\.numerique\.gouv\.fr$/, path: /^\/./ },
 ];
-
-const UNSAFE_SCHEMES = new Set(['javascript', 'data', 'vbscript', 'file', 'blob', 'about']);
 
 const URL_RE = /https?:\/\/[^\s<>"']+/g;
 
@@ -105,12 +105,13 @@ export function findMeetingLink(event: EventPlaces): MeetingLink | null {
   }
   const inDescription = firstMeetingUrl(event.description);
   if (inDescription) return inDescription;
-  // Last resort: a virtual location in an app scheme (msteams:, zoommtg:,
-  // sip:…) still beats no link at all. Never a scheme that runs code.
+  // Last resort: a virtual location in another scheme the app may open (a
+  // tel: dial-in, say). App schemes like msteams:, zoommtg: or sip: are left
+  // out because openExternalUrl refuses them, and a Join button that does
+  // nothing is worse than none.
   for (const vl of Object.values(event.virtualLocations ?? {})) {
     const uri = vl?.uri?.trim();
-    const scheme = uri ? /^([a-z][a-z0-9+.-]*):/i.exec(uri)?.[1].toLowerCase() : undefined;
-    if (uri && scheme && !UNSAFE_SCHEMES.has(scheme)) return { uri, derived: false };
+    if (isSafeExternalUrl(uri)) return { uri, derived: false };
   }
   return null;
 }

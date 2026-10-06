@@ -8,6 +8,7 @@ import {
   primaryLocationName,
   unwrapSafeLink,
 } from '../event-links';
+import { isSafeExternalUrl } from '../open-url';
 
 /**
  * A Teams invitation fills LOCATION with "Microsoft Teams Meeting" and leaves
@@ -64,11 +65,23 @@ describe('findMeetingLink', () => {
     expect(findMeetingLink({})).toBeNull();
   });
 
-  it('falls back to an app-scheme virtual location, never a script one', () => {
-    expect(findMeetingLink({ virtualLocations: { v: { uri: 'msteams:/l/meetup-join/19%3a1' } } }))
-      .toEqual({ uri: 'msteams:/l/meetup-join/19%3a1', derived: false });
+  it('falls back to an openable non-web virtual location, never a script one', () => {
+    expect(findMeetingLink({ virtualLocations: { v: { uri: 'tel:+33123456789' } } }))
+      .toEqual({ uri: 'tel:+33123456789', derived: false });
     expect(findMeetingLink({ virtualLocations: { v: { uri: 'javascript:alert(1)' } } })).toBeNull();
     expect(findMeetingLink({ virtualLocations: { v: { uri: 'data:text/html,x' } } })).toBeNull();
+  });
+
+  // openExternalUrl refuses these schemes, so offering one gave a Join button
+  // and a location tap that did nothing.
+  it('never offers an app-scheme link the app cannot open', () => {
+    for (const uri of ['msteams:/l/meetup-join/19%3a1', 'zoommtg://zoom.us/join?confno=1', 'sip:room@example.com']) {
+      expect(findMeetingLink({ virtualLocations: { v: { uri } } })).toBeNull();
+      expect(isSafeExternalUrl(uri)).toBe(false);
+    }
+    expect(findMeetingLink({
+      virtualLocations: { a: { uri: 'msteams:/l/meetup-join/19%3a1' }, b: { uri: 'tel:+33123456789' } },
+    })?.uri).toBe('tel:+33123456789');
   });
 
   it('recognises the Zoom web-client join path', () => {
