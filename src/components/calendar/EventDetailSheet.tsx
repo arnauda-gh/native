@@ -9,11 +9,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  ToastAndroid,
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { openExternalUrl } from '../../lib/open-url';
+import { toast } from '../../stores/toast-store';
+import { ToastHost } from '../ToastHost';
 import { splitTextLinks } from '../../lib/linkify-text';
 import { findMeetingLink, locationAction, mapsUrl, primaryLocationName } from '../../lib/event-links';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -227,9 +228,7 @@ export function EventDetailSheet({
   const copyLocation = () => {
     if (!location) return;
     void Clipboard.setStringAsync(location).then(() => {
-      if (Platform.OS === 'android') {
-        ToastAndroid.show(t('notifications.copied_to_clipboard', 'Copied to clipboard'), ToastAndroid.SHORT);
-      }
+      toast.success(t('notifications.copied_to_clipboard', 'Copied to clipboard'));
     }).catch(() => {});
   };
 
@@ -457,6 +456,9 @@ export function EventDetailSheet({
           )}
         </SafeAreaView>
       </Animated.View>
+      {/* The screen's own toast host sits under this Modal; this one shows
+          the copy confirmation above the sheet. */}
+      <ToastHost />
     </Modal>
   );
 }
