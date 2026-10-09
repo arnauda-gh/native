@@ -743,7 +743,7 @@ function EmailViewer({ route, navigation }: Props) {
             onMomentumScrollEnd={onMomentumEnd}
             onScrollToIndexFailed={(info) => {
               setTimeout(() => {
-                listRef.current?.scrollToOffset({ offset: info.offset, animated: false });
+                listRef.current?.scrollToOffset({ offset: info.index * windowWidth, animated: false });
               }, 50);
             }}
             renderItem={({ item, index }) => (
