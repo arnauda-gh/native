@@ -735,12 +735,17 @@ function EmailViewer({ route, navigation }: Props) {
             initialScrollIndex={initialIndexRef.current}
             getItemLayout={(_, index) => ({ length: windowWidth, offset: windowWidth * index, index })}
             windowSize={3}
-            initialNumToRender={1}
+            initialNumToRender={Math.max(initialIndexRef.current + 1, 1)}
             maxToRenderPerBatch={2}
             removeClippedSubviews
             scrollEnabled={!pagerLocked}
             onScrollBeginDrag={releaseNeighbours}
             onMomentumScrollEnd={onMomentumEnd}
+            onScrollToIndexFailed={(info) => {
+              setTimeout(() => {
+                listRef.current?.scrollToOffset({ offset: info.offset, animated: false });
+              }, 50);
+            }}
             renderItem={({ item, index }) => (
               <View style={{ width: windowWidth }}>
                 <EmailPane
