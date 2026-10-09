@@ -561,16 +561,36 @@ export interface NotificationActionPayload {
   jmapAccountId?: string;
 }
 
+export function parseNotificationActionPayload(data: unknown): NotificationActionPayload | null {
+  if (!data || typeof data !== 'object') return null;
+  const d = data as Record<string, unknown>;
+  const action = (d.action ?? d['bulwark.notification.action']) as 'markRead' | 'delete' | undefined;
+  const emailId = (d.emailId ?? d['bulwark.notification.emailId']) as string | undefined;
+  const accountId = (d.accountId ?? d['bulwark.notification.accountId']) as string | undefined;
+  const jmapAccountId = (d.jmapAccountId ?? d['bulwark.notification.jmapAccountId']) as string | undefined;
+
+  if ((action === 'markRead' || action === 'delete') && emailId && accountId) {
+    return { action, emailId, accountId, jmapAccountId };
+  }
+  return null;
+}
+
 export async function handleNotificationAction(data: unknown): Promise<void> {
-  if (!data || typeof data !== 'object') return;
-  const p = data as NotificationActionPayload;
-  const { action, emailId, accountId } = p;
-  if (!action || !emailId || !accountId) return;
+  const payload = parseNotificationActionPayload(data);
+  if (!payload) {
+    console.warn('[push] invalid notification action payload', data);
+    return;
+  }
+  const { action, emailId, accountId, jmapAccountId } = payload;
+  console.log(`[push] executing notification action "${action}" for email ${emailId}`);
 
   try {
     const session = await openDetachedSession(accountId);
-    if (!session) return;
-    const emailAccountId = p.jmapAccountId ?? session.jmapAccountId;
+    if (!session) {
+      console.warn('[push] failed to open detached session for account', accountId);
+      return;
+    }
+    const emailAccountId = jmapAccountId ?? session.jmapAccountId;
 
     if (action === 'markRead') {
       await jmapPost(session, [

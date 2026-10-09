@@ -252,6 +252,41 @@ describe('pushBackgroundTask notifications', () => {
       ['Email/set', { accountId: 'jmap-primary', update: { m1: { 'keywords/$seen': true } } }, '0'],
     ]);
   });
+
+  it('handles delete action by moving email to trash', async () => {
+    const postCalls: any[] = [];
+    (secureFetch as ReturnType<typeof vi.fn>).mockImplementation(async (url: string, opts?: any) => {
+      if (opts?.body) {
+        postCalls.push(JSON.parse(opts.body));
+      }
+      return {
+        ok: true,
+        json: async () => (url.endsWith('/.well-known/jmap')
+          ? {
+            apiUrl: 'https://mail.example.com/jmap/',
+            primaryAccounts: { 'urn:ietf:params:jmap:mail': 'jmap-primary' },
+            accounts: { 'jmap-primary': {} },
+          }
+          : {
+            methodResponses: [
+              ['Mailbox/get', { list: [{ id: 'trash-box', role: 'trash' }] }, '0'],
+              ['Email/set', { updated: { m1: {} } }, '0'],
+            ],
+          }),
+      };
+    });
+
+    await handleNotificationAction({
+      'bulwark.notification.action': 'delete',
+      'bulwark.notification.emailId': 'm1',
+      'bulwark.notification.accountId': LOCAL,
+    });
+
+    expect(postCalls.length).toBe(2);
+    expect(postCalls[1].methodCalls).toEqual([
+      ['Email/set', { accountId: 'jmap-primary', update: { m1: { mailboxIds: { 'trash-box': true } } } }, '0'],
+    ]);
+  });
 });
 
 describe('pushes for device sync (#34)', () => {
